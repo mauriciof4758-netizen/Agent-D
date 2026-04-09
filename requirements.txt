@@ -1,2 +1,7 @@
 claude-agent-sdk>=0.0.14
 anyio>=4.0.0
+
+# Plague Inc. AI — neural network training & Core ML export
+torch>=2.0.0
+numpy>=1.24.0
+coremltools>=7.0
