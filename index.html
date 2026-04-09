@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Plague Inc. AI</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#08080f;color:#ddd;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif;padding:14px;min-height:100dvh}
+
+    h1{font-size:22px;font-weight:700;color:#4dff91;letter-spacing:.5px}
+    .sub{font-size:12px;color:#666;margin-top:2px;margin-bottom:14px}
+
+    /* ---- status bar ---- */
+    .statbar{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+    .stat{background:#111;border-radius:10px;padding:8px 6px;text-align:center}
+    .stat .val{font-size:18px;font-weight:700}
+    .stat .lbl{font-size:10px;color:#666;margin-top:1px}
+    .inf{color:#ff8c42}
+    .dead{color:#ff4545}
+    .cure{color:#4ab0ff}
+    .dna{color:#4dff91}
+
+    /* ---- world grid ---- */
+    .world-title{font-size:12px;color:#555;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px}
+    .world{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px}
+    .region{background:#111;border-radius:8px;padding:8px 6px;border:1px solid #1a1a2a}
+    .region-name{font-size:10px;color:#888;margin-bottom:4px}
+    .region-bar-bg{height:5px;background:#1a1a2a;border-radius:3px;overflow:hidden}
+    .region-bar{height:5px;border-radius:3px;transition:width .4s}
+    .region-pct{font-size:12px;font-weight:600;margin-top:3px}
+    .detected{border-color:#ff4545 !important}
+
+    /* ---- log ---- */
+    .log-wrap{background:#0d0d18;border-radius:10px;padding:10px;margin-bottom:14px;max-height:130px;overflow-y:auto}
+    .log-title{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+    .log-entry{font-size:12px;padding:2px 0;border-bottom:1px solid #111;color:#aaa}
+    .log-entry.good{color:#4dff91}
+    .log-entry.bad{color:#ff4545}
+    .log-entry.act{color:#ff8c42}
+
+    /* ---- training panel ---- */
+    .train-panel{background:#0d0d18;border-radius:12px;padding:12px;margin-bottom:14px}
+    .train-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:13px}
+    .train-row span:last-child{color:#4dff91;font-weight:600}
+    .prog-bg{height:8px;background:#1a1a2a;border-radius:4px;overflow:hidden;margin-bottom:8px}
+    .prog-bar{height:8px;background:linear-gradient(90deg,#4dff91,#00c96b);border-radius:4px;transition:width .3s}
+    .train-note{font-size:11px;color:#555;text-align:center}
+
+    /* ---- buttons ---- */
+    .btns{display:flex;gap:8px;flex-direction:column}
+    .btn{width:100%;padding:14px;border-radius:12px;border:none;font-size:15px;font-weight:600;cursor:pointer;transition:opacity .15s}
+    .btn:active{opacity:.75}
+    .btn-train{background:linear-gradient(135deg,#00b050,#004d25);color:#fff}
+    .btn-play{background:linear-gradient(135deg,#e84040,#7a0000);color:#fff}
+    .btn-stop{background:#222;color:#888;border:1px solid #333}
+    .btn:disabled{opacity:.35;cursor:default}
+
+    /* ---- turn badge ---- */
+    .turn-badge{display:inline-block;background:#1a1a2a;border-radius:6px;padding:2px 8px;font-size:12px;color:#666;margin-bottom:14px}
+
+    .phase-label{font-size:11px;font-weight:600;letter-spacing:.5px;text-align:center;padding:4px;border-radius:6px;margin-bottom:10px}
+    .phase-training{background:#1a2a1a;color:#4dff91}
+    .phase-playing{background:#2a1a1a;color:#ff8c42}
+    .phase-idle{background:#1a1a1a;color:#555}
+
+    /* ---- result banner ---- */
+    .banner{display:none;border-radius:12px;padding:16px;text-align:center;margin-bottom:14px}
+    .banner.win{background:#0a2a0a;border:1px solid #4dff91;color:#4dff91}
+    .banner.lose{background:#2a0a0a;border:1px solid #ff4545;color:#ff4545}
+    .banner-title{font-size:22px;font-weight:700}
+    .banner-sub{font-size:13px;margin-top:4px;color:#aaa}
+  </style>
+</head>
+<body>
+
+<h1>🦠 Plague Inc. AI</h1>
+<p class="sub">Neural network that learns to wipe out humanity</p>
+
+<div class="statbar">
+  <div class="stat"><div class="val inf" id="s-inf">0%</div><div class="lbl">Infected</div></div>
+  <div class="stat"><div class="val dead" id="s-dead">0%</div><div class="lbl">Dead</div></div>
+  <div class="stat"><div class="val cure" id="s-cure">0%</div><div class="lbl">Cure</div></div>
+  <div class="stat"><div class="val dna" id="s-dna">5</div><div class="lbl">DNA</div></div>
+</div>
+
+<div id="banner" class="banner"></div>
+
+<div class="turn-badge">Turn <span id="s-turn">0</span> / 500</div>
+
+<div class="phase-label phase-idle" id="phase-lbl">READY</div>
+
+<p class="world-title">World Infection Map</p>
+<div class="world" id="world-grid"></div>
+
+<div class="log-wrap">
+  <div class="log-title">AI Action Log</div>
+  <div id="log-list"></div>
+</div>
+
+<div class="train-panel" id="train-panel">
+  <div class="train-row"><span>Training episodes</span><span id="ep-count">0 / 300</span></div>
+  <div class="prog-bg"><div class="prog-bar" id="prog-bar" style="width:0%"></div></div>
+  <div class="train-row"><span>Win rate</span><span id="win-rate">—</span></div>
+  <div class="train-note" id="train-note">Press Train to teach the AI how to play</div>
+</div>
+
+<div class="btns">
+  <button class="btn btn-train" id="btn-train" onclick="startTraining()">🧬 Train Neural Network</button>
+  <button class="btn btn-play"  id="btn-play"  onclick="startPlay()" disabled>▶ Watch AI Play</button>
+  <button class="btn btn-stop"  id="btn-stop"  onclick="stopAll()" disabled>⏹ Stop</button>
+</div>
+
+<script>
+// ================================================================
+// CONSTANTS
+// ================================================================
+const STATE_SIZE  = 45;
+const ACTION_SIZE = 25;
+const MAX_TURNS   = 500;
+const GAMMA       = 0.99;
+const BATCH_SIZE  = 32;
+const BUF_MAX     = 8000;
+const TARGET_SYNC = 150;   // steps between target net updates
+const TRAIN_EPS   = 300;   // training episodes
+
+const ACTIONS = [
+  {n:"Wait",              c:0,  p:[],    i:0.00, l:0.000, v: 0.00, s:0.00},
+  {n:"Air Trans. 1",      c:3,  p:[],    i:0.15, l:0.000, v: 0.00, s:0.00},
+  {n:"Air Trans. 2",      c:5,  p:[1],   i:0.15, l:0.000, v: 0.00, s:0.00},
+  {n:"Water Trans. 1",    c:3,  p:[],    i:0.15, l:0.000, v: 0.00, s:0.00},
+  {n:"Water Trans. 2",    c:5,  p:[3],   i:0.15, l:0.000, v: 0.00, s:0.00},
+  {n:"Drug Resist. 1",    c:6,  p:[],    i:0.00, l:0.000, v: 0.00, s:0.20},
+  {n:"Drug Resist. 2",    c:15, p:[5],   i:0.00, l:0.000, v: 0.00, s:0.30},
+  {n:"Cold Resist. 1",    c:5,  p:[],    i:0.10, l:0.000, v: 0.00, s:0.00},
+  {n:"Cold Resist. 2",    c:10, p:[7],   i:0.10, l:0.000, v: 0.00, s:0.00},
+  {n:"Heat Resist. 1",    c:5,  p:[],    i:0.10, l:0.000, v: 0.00, s:0.00},
+  {n:"Heat Resist. 2",    c:10, p:[9],   i:0.10, l:0.000, v: 0.00, s:0.00},
+  {n:"Coughing",          c:3,  p:[],    i:0.10, l:0.002, v: 0.05, s:0.00},
+  {n:"Sneezing",          c:2,  p:[],    i:0.08, l:0.000, v: 0.03, s:0.00},
+  {n:"Rash",              c:2,  p:[],    i:0.05, l:0.001, v: 0.04, s:0.00},
+  {n:"Sweating",          c:2,  p:[],    i:0.03, l:0.000, v: 0.02, s:0.00},
+  {n:"Vomiting",          c:4,  p:[],    i:0.12, l:0.003, v: 0.08, s:0.00},
+  {n:"Fever",             c:3,  p:[],    i:0.05, l:0.002, v: 0.10, s:0.00},
+  {n:"Pneumonia",         c:8,  p:[11],  i:0.15, l:0.010, v: 0.15, s:0.00},
+  {n:"Pulmonary Edema",   c:15, p:[17],  i:0.05, l:0.020, v: 0.20, s:0.00},
+  {n:"Organ Failure",     c:20, p:[18],  i:0.00, l:0.040, v: 0.30, s:0.00},
+  {n:"Hemorrhagic Shock", c:25, p:[19],  i:0.05, l:0.030, v: 0.25, s:0.00},
+  {n:"Gen. Hardening 1",  c:10, p:[],    i:0.00, l:0.000, v: 0.00, s:0.25},
+  {n:"Gen. Hardening 2",  c:15, p:[21],  i:0.00, l:0.000, v: 0.00, s:0.30},
+  {n:"Gen. Re-shuffle",   c:16, p:[],    i:0.00, l:0.000, v: 0.00, s:0.00},
+  {n:"Symptom Suppress.", c:12, p:[],    i:0.00, l:0.000, v:-0.50, s:0.00},
+];
+
+const REGIONS = [
+  {n:"N. America",  pop:500e6,  clim:"t", h:8.5, pov:3.0},
+  {n:"Europe",      pop:750e6,  clim:"c", h:9.0, pov:2.0},
+  {n:"S. America",  pop:420e6,  clim:"h", h:5.0, pov:6.0},
+  {n:"Africa",      pop:1300e6, clim:"h", h:3.0, pov:8.5},
+  {n:"Mid. East",   pop:400e6,  clim:"h", h:6.0, pov:5.0},
+  {n:"India",       pop:1400e6, clim:"h", h:4.0, pov:7.0},
+  {n:"China",       pop:1400e6, clim:"t", h:7.0, pov:4.0},
+  {n:"SE Asia",     pop:700e6,  clim:"h", h:5.0, pov:6.0},
+  {n:"Russia",      pop:144e6,  clim:"c", h:6.0, pov:5.0},
+  {n:"Oceania",     pop:45e6,   clim:"h", h:8.5, pov:2.5},
+  {n:"C. Asia",     pop:100e6,  clim:"c", h:4.0, pov:7.0},
+  {n:"Islands",     pop:100e6,  clim:"h", h:4.5, pov:5.5},
+];
+
+// ================================================================
+// SIMULATION
+// ================================================================
+class PlagueGame {
+  constructor(){this.reset()}
+
+  reset(){
+    this.regions = REGIONS.map(r=>({...r, inf:0, dead:0, det:false}));
+    this.upgrades = new Array(ACTION_SIZE).fill(false);
+    this.dna = 5;
+    this.cure = 0;
+    this.turn = 0;
+    this.done = false;
+    this.won  = false;
+    this.infectivity = 0.05;
+    this.lethality   = 0.001;
+    this.visibility  = 0.0;
+    this.cureSlow    = 0.0;
+    // seed a random warm/poor region
+    const starts=[3,5,7,6,4];
+    this.regions[starts[Math.floor(Math.random()*starts.length)]].inf=1000;
+    return this._state();
+  }
+
+  _totPop(){ return this.regions.reduce((a,r)=>a+r.pop,0) }
+  _totInf(){ return this.regions.reduce((a,r)=>a+r.inf,0) }
+  _totDead(){return this.regions.reduce((a,r)=>a+r.dead,0)}
+  _totHealthy(){ return this.regions.reduce((a,r)=>a+Math.max(0,r.pop-r.inf-r.dead),0)}
+  _detected(){ return this.regions.some(r=>r.det) }
+
+  _climateMod(r){
+    let m=1.0;
+    if(r.clim==='c'){ m += 0.3*this.upgrades[7]+0.3*this.upgrades[8]-0.3; }
+    else if(r.clim==='h'){ m += 0.3*this.upgrades[9]+0.3*this.upgrades[10]-0.1; }
+    return Math.max(0.05,m);
+  }
+
+  _spread(){
+    const tot=this._totPop();
+    const gInfPct=this._totInf()/tot;
+    for(const r of this.regions){
+      const healthy=Math.max(0,r.pop-r.inf-r.dead);
+      if(healthy<=0) continue;
+      const lRate=r.inf/r.pop;
+      if(lRate<=0&&gInfPct<0.001) continue;
+      const cm=this._climateMod(r);
+      const pm=1+r.pov*0.08;
+      const hm=Math.max(0.1,1-r.h*0.06);
+      let newInf=(this.infectivity*cm*pm*hm*lRate*healthy);
+      if(gInfPct>0.005) newInf+=healthy*gInfPct*0.0003;
+      const noise=0.85+Math.random()*0.3;
+      newInf=Math.min(healthy,Math.max(0,newInf*noise));
+      r.inf+=newInf;
+      const hf=Math.max(0.1,1-r.h*0.07);
+      const newDead=Math.min(r.inf*0.15,Math.max(0,r.inf*this.lethality*hf));
+      r.inf-=newDead; r.dead+=newDead;
+      if(!r.det){
+        const thresh=Math.max(0.0005,0.008-this.visibility*0.004);
+        const prob=0.08+r.h*0.025;
+        if(r.inf/r.pop>thresh&&Math.random()<prob) r.det=true;
+      }
+    }
+  }
+
+  _cure(){
+    if(!this._detected()) return;
+    const det=this.regions.filter(r=>r.det);
+    const base=det.reduce((a,r)=>a+r.h/10,0)*0.0025;
+    const slow=Math.max(0.05,1-this.cureSlow);
+    const dp=Math.max(0.1,1-this._totDead()/this._totPop()*0.6);
+    this.cure=Math.min(1,this.cure+base*slow*dp);
+  }
+
+  _dna(){
+    const pct=this._totInf()/this._totPop();
+    this.dna=Math.min(200,this.dna+Math.sqrt(Math.max(0,pct))*0.6+pct*0.3+0.1);
+  }
+
+  validActions(){
+    const v=[];
+    for(let i=0;i<ACTION_SIZE;i++){
+      if(i===0){v.push(0);continue}
+      if(this.upgrades[i]) continue;
+      const a=ACTIONS[i];
+      if(this.dna<a.c) continue;
+      if(a.p.every(x=>this.upgrades[x])) v.push(i);
+    }
+    return v;
+  }
+
+  step(action){
+    const tot=this._totPop();
+    const prevAff=this._totInf()+this._totDead();
+    const prevCure=this.cure;
+    let reward=0;
+
+    if(action!==0){
+      const v=this.validActions();
+      if(v.includes(action)){
+        const a=ACTIONS[action];
+        this.dna-=a.c;
+        this.upgrades[action]=true;
+        this.infectivity+=a.i;
+        this.lethality+=a.l;
+        this.visibility=Math.max(-1,this.visibility+a.v);
+        this.cureSlow+=a.s;
+        if(action===23) this.cure=Math.max(0,this.cure-0.25);
+        reward+=0.1;
+      } else { reward-=0.2; }
+    }
+
+    this._spread();
+    this._cure();
+    this._dna();
+    this.turn++;
+
+    const newAff=this._totInf()+this._totDead();
+    reward+=(newAff-prevAff)/tot*15;
+    reward-=(this.cure-prevCure)*8;
+
+    const healthyPct=this._totHealthy()/tot;
+    const infPct=this._totInf()/tot;
+    const deadPct=this._totDead()/tot;
+    let result='';
+
+    if(this.cure>=1){
+      this.done=true; this.won=false; reward-=20; result='cure_complete';
+    } else if(infPct+deadPct>=0.999||healthyPct<1e-4){
+      this.done=true; this.won=true; reward+=100; result='world_gone';
+    } else if(this.turn>=MAX_TURNS){
+      this.done=true; this.won=false; reward-=10; result='timeout';
+    }
+
+    return {state:this._state(), reward, done:this.done, result};
+  }
+
+  _state(){
+    const tot=this._totPop();
+    const s=new Float32Array(STATE_SIZE);
+    s[0]=this._totInf()/tot;
+    s[1]=this._totDead()/tot;
+    s[2]=this.cure;
+    s[3]=Math.min(1,this.dna/100);
+    s[4]=this.turn/MAX_TURNS;
+    for(let i=0;i<12;i++) s[5+i]=this.regions[i].inf/this.regions[i].pop;
+    s[17]=Math.min(1,this.infectivity/0.5);
+    s[18]=Math.min(1,this.lethality/0.1);
+    s[19]=Math.max(-1,Math.min(1,this.visibility));
+    for(let i=1;i<ACTION_SIZE;i++) s[19+i]=this.upgrades[i]?1:0;
+    s[44]=this._detected()?1:0;
+    return s;
+  }
+}
+
+// ================================================================
+// DQN AGENT
+// ================================================================
+class DQNAgent {
+  constructor(){
+    this.policy = this._buildNet();
+    this.target = this._buildNet();
+    this._syncTarget();
+    this.opt = tf.train.adam(0.001);
+    this.buf = [];
+    this.steps = 0;
+    this.epsilon = 1.0;
+  }
+
+  _buildNet(){
+    const m=tf.sequential();
+    m.add(tf.layers.dense({units:64,activation:'relu',inputShape:[STATE_SIZE]}));
+    m.add(tf.layers.dense({units:64,activation:'relu'}));
+    m.add(tf.layers.dense({units:ACTION_SIZE}));
+    return m;
+  }
+
+  _syncTarget(){
+    const w=this.policy.getWeights();
+    this.target.setWeights(w.map(x=>x.clone()));
+  }
+
+  act(state, validActions){
+    if(Math.random()<this.epsilon)
+      return validActions[Math.floor(Math.random()*validActions.length)];
+    return tf.tidy(()=>{
+      const q=this.policy.predict(tf.tensor2d([Array.from(state)],[1,STATE_SIZE])).dataSync();
+      let best=validActions[0], bestQ=-Infinity;
+      for(const a of validActions) if(q[a]>bestQ){bestQ=q[a];best=a;}
+      return best;
+    });
+  }
+
+  remember(s,a,r,ns,done){
+    if(this.buf.length>=BUF_MAX) this.buf.shift();
+    this.buf.push([Array.from(s),a,r,Array.from(ns),done?1:0]);
+  }
+
+  train(){
+    if(this.buf.length<BATCH_SIZE) return;
+    const idxs=[];
+    while(idxs.length<BATCH_SIZE) idxs.push(Math.floor(Math.random()*this.buf.length));
+    const batch=idxs.map(i=>this.buf[i]);
+
+    const states   =batch.map(b=>b[0]);
+    const actions  =batch.map(b=>b[1]);
+    const rewards  =batch.map(b=>b[2]);
+    const nstates  =batch.map(b=>b[3]);
+    const dones    =batch.map(b=>b[4]);
+
+    // Compute targets (no gradient)
+    const targets=tf.tidy(()=>{
+      const ns=tf.tensor2d(nstates);
+      const qn=this.target.predict(ns).max(1);
+      const r=tf.tensor1d(rewards);
+      const d=tf.tensor1d(dones);
+      return r.add(qn.mul(GAMMA).mul(tf.scalar(1).sub(d))).arraySync();
+    });
+
+    // Gradient step
+    this.opt.minimize(()=>{
+      const st=tf.tensor2d(states);
+      const ac=tf.tensor1d(actions,'int32');
+      const qAll=this.policy.predict(st);
+      const mask=tf.oneHot(ac,ACTION_SIZE).cast('float32');
+      const qSel=qAll.mul(mask).sum(1);
+      const tgt=tf.tensor1d(targets);
+      const loss=tf.losses.meanSquaredError(tgt,qSel);
+      tgt.dispose();
+      return loss;
+    });
+
+    this.steps++;
+    if(this.steps%TARGET_SYNC===0) this._syncTarget();
+  }
+}
+
+// ================================================================
+// STATE
+// ================================================================
+let agent     = null;
+let game      = null;
+let loopTimer = null;
+let isTraining= false;
+let isPlaying = false;
+let trainEp   = 0;
+let wins      = 0;
+let gameSpeed = 120; // ms between turns while playing
+
+// ================================================================
+// UI HELPERS
+// ================================================================
+function buildWorldGrid(){
+  const g=document.getElementById('world-grid');
+  g.innerHTML='';
+  REGIONS.forEach((r,i)=>{
+    const d=document.createElement('div');
+    d.className='region'; d.id='r'+i;
+    d.innerHTML=`<div class="region-name">${r.n}</div>
+      <div class="region-bar-bg"><div class="region-bar" id="rb${i}" style="width:0%;background:#4dff91"></div></div>
+      <div class="region-pct" id="rp${i}">0%</div>`;
+    g.appendChild(d);
+  });
+}
+
+function barColor(pct){
+  if(pct<5)  return '#4dff91';
+  if(pct<20) return '#ffdd57';
+  if(pct<50) return '#ff8c42';
+  if(pct<80) return '#ff6030';
+  return '#ff3030';
+}
+
+function updateUI(g){
+  const tot=g._totPop();
+  const infP=g._totInf()/tot*100;
+  const deadP=g._totDead()/tot*100;
+  const cureP=g.cure*100;
+  document.getElementById('s-inf').textContent=infP.toFixed(1)+'%';
+  document.getElementById('s-dead').textContent=deadP.toFixed(1)+'%';
+  document.getElementById('s-cure').textContent=cureP.toFixed(1)+'%';
+  document.getElementById('s-dna').textContent=Math.floor(g.dna);
+  document.getElementById('s-turn').textContent=g.turn;
+  for(let i=0;i<12;i++){
+    const r=g.regions[i];
+    const pct=r.inf/r.pop*100;
+    document.getElementById('rb'+i).style.width=Math.min(100,pct)+'%';
+    document.getElementById('rb'+i).style.background=barColor(pct);
+    document.getElementById('rp'+i).textContent=pct.toFixed(1)+'%';
+    const el=document.getElementById('r'+i);
+    el.className=r.det?'region detected':'region';
+  }
+}
+
+function addLog(msg, cls=''){
+  const l=document.getElementById('log-list');
+  const d=document.createElement('div');
+  d.className='log-entry '+(cls||'');
+  d.textContent=msg;
+  l.prepend(d);
+  while(l.children.length>30) l.lastChild.remove();
+}
+
+function setPhase(txt,cls){
+  const el=document.getElementById('phase-lbl');
+  el.textContent=txt; el.className='phase-label '+cls;
+}
+
+function showBanner(title,sub,type){
+  const b=document.getElementById('banner');
+  b.className='banner '+type;
+  b.innerHTML=`<div class="banner-title">${title}</div><div class="banner-sub">${sub}</div>`;
+  b.style.display='block';
+}
+
+function hideBanner(){document.getElementById('banner').style.display='none';}
+
+// ================================================================
+// TRAINING
+// ================================================================
+async function startTraining(){
+  if(isTraining||isPlaying) return;
+  isTraining=true;
+  trainEp=0; wins=0;
+  hideBanner();
+  document.getElementById('btn-train').disabled=true;
+  document.getElementById('btn-play').disabled=true;
+  document.getElementById('btn-stop').disabled=false;
+  setPhase('TRAINING...','phase-training');
+  document.getElementById('train-note').textContent='Training neural network — this takes 1-2 min';
+  addLog('Starting training: '+TRAIN_EPS+' episodes…');
+
+  agent=new DQNAgent();
+  game=new PlagueGame();
+
+  async function runEpisode(){
+    if(!isTraining) return;
+    game.reset();
+    const epStart=agent.steps;
+    agent.epsilon=Math.max(0.05,1.0-trainEp/200);
+    let state=game._state();
+    let steps=0;
+
+    while(!game.done&&steps<MAX_TURNS){
+      const v=game.validActions();
+      const a=agent.act(state,v);
+      const {state:ns,reward,done}=game.step(a);
+      agent.remember(state,a,reward,ns,done);
+      agent.train();
+      state=ns; steps++;
+    }
+
+    if(game.won) wins++;
+    trainEp++;
+
+    // Update UI
+    const pct=trainEp/TRAIN_EPS*100;
+    document.getElementById('ep-count').textContent=trainEp+' / '+TRAIN_EPS;
+    document.getElementById('prog-bar').style.width=pct+'%';
+    const wr=trainEp>0?(wins/trainEp*100).toFixed(0)+'%':'—';
+    document.getElementById('win-rate').textContent=wr;
+    updateUI(game);
+
+    if(trainEp%20===0){
+      const tot=game._totPop();
+      const infP=(game._totInf()/tot*100).toFixed(1);
+      addLog(`Ep ${trainEp}: ${game.won?'WIN':'loss'}  inf=${infP}%  ε=${agent.epsilon.toFixed(2)}`
+             , game.won?'good':'');
+    }
+
+    if(trainEp>=TRAIN_EPS){
+      trainingDone();
+      return;
+    }
+
+    // Yield to browser every 5 episodes to keep UI responsive
+    if(trainEp%5===0){
+      await new Promise(r=>setTimeout(r,0));
+    }
+    runEpisode();
+  }
+
+  runEpisode();
+}
+
+function trainingDone(){
+  isTraining=false;
+  setPhase('TRAINED  ✓','phase-training');
+  document.getElementById('train-note').textContent='Training complete! Win rate: '+(wins/TRAIN_EPS*100).toFixed(0)+'%';
+  document.getElementById('btn-play').disabled=false;
+  document.getElementById('btn-stop').disabled=true;
+  document.getElementById('btn-train').disabled=false;
+  addLog('Training done! Win rate: '+(wins/TRAIN_EPS*100).toFixed(0)+'%','good');
+}
+
+// ================================================================
+// PLAY / WATCH
+// ================================================================
+function startPlay(){
+  if(isPlaying) return;
+  if(!agent){ addLog('Train first!','bad'); return; }
+  isPlaying=true;
+  hideBanner();
+  document.getElementById('btn-play').disabled=true;
+  document.getElementById('btn-stop').disabled=false;
+  document.getElementById('log-list').innerHTML='';
+  setPhase('AI PLAYING','phase-playing');
+  game=new PlagueGame();
+  agent.epsilon=0; // pure exploitation
+  addLog('New game started — AI is playing…','act');
+  loopTimer=setInterval(playStep,gameSpeed);
+}
+
+function playStep(){
+  if(!isPlaying){clearInterval(loopTimer);return;}
+  if(game.done){
+    clearInterval(loopTimer);
+    isPlaying=false;
+    document.getElementById('btn-play').disabled=false;
+    document.getElementById('btn-stop').disabled=true;
+    const tot=game._totPop();
+    const infP=(game._totInf()/tot*100).toFixed(1);
+    const deadP=(game._totDead()/tot*100).toFixed(1);
+    if(game.won){
+      setPhase('AI WON  🦠','phase-playing');
+      showBanner('WORLD ELIMINATED 🦠','Infected: '+infP+'%  Dead: '+deadP+'%  Turn: '+game.turn,'win');
+      addLog('AI WINS in '+game.turn+' turns!','good');
+    } else {
+      setPhase('AI LOST  💉','phase-idle');
+      showBanner('CURE FOUND 💉','AI failed — scientists won. Turn: '+game.turn,'lose');
+      addLog('AI LOSES at turn '+game.turn+' — cure completed','bad');
+    }
+    return;
+  }
+  const v=game.validActions();
+  const state=game._state();
+  const action=agent.act(state,v);
+  game.step(action);
+  updateUI(game);
+  if(action!==0) addLog('T'+game.turn+': EVOLVE → '+ACTIONS[action].n,'act');
+}
+
+function stopAll(){
+  isTraining=false;
+  isPlaying=false;
+  clearInterval(loopTimer);
+  document.getElementById('btn-stop').disabled=true;
+  document.getElementById('btn-train').disabled=false;
+  if(agent) document.getElementById('btn-play').disabled=false;
+  setPhase('STOPPED','phase-idle');
+  addLog('Stopped.','');
+}
+
+// ================================================================
+// INIT
+// ================================================================
+buildWorldGrid();
+game=new PlagueGame();
+updateUI(game);
+</script>
+</body>
+</html>
