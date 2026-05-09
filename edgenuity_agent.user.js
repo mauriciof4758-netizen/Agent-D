@@ -444,13 +444,45 @@ Available actions:
     toEl.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, clientX:tx, clientY:ty}));
   }
 
+  // Selectors that count as "submitting an answer" — trigger post-submit verification
+  const SUBMIT_SELECTORS = ['#btnCheck', 'span#btnCheck'];
+
+  async function verifySubmit() {
+    // Wait for page to react to the submission
+    await sleep(2000);
+    const wrong   = !!findElement('span.TextAnswerIncorrect');
+    const correct = !!findElement('span.TextAnswerCorrect');
+    if (wrong) {
+      log('❌ Wrong answer detected — injecting correction notice', 'error');
+      // Force the LLM to reconsider by pushing a system-level correction into history
+      history.push({
+        role: 'user',
+        content: '⚠️ VERIFICATION FAILED: span.TextAnswerIncorrect is on screen. ' +
+                 'Your last answer was WRONG. You must clear the field, type a DIFFERENT answer, ' +
+                 'and click span#btnCheck again. Do NOT advance to the next frame yet.',
+      });
+    } else if (correct) {
+      log('✅ Answer verified correct', 'ok');
+    } else {
+      log('Answer submitted — no feedback element found yet', 'info');
+    }
+  }
+
   async function executeAction(action) {
     switch (action.action) {
       case 'click': {
         const el = findElement(action.selector);
         if (!el) { log(`Click failed — not found: ${action.selector}`, 'warn'); return; }
         log(`Click: ${action.selector} — ${action.reason}`, 'ok');
-        simulateClick(el); await sleep(ACTION_DELAY_MS); break;
+        simulateClick(el);
+        await sleep(ACTION_DELAY_MS);
+        // Run post-submit verification whenever the agent clicks the Done/Check button
+        if (SUBMIT_SELECTORS.some(s => {
+          try { return el === findElement(s); } catch(e) { return false; }
+        })) {
+          await verifySubmit();
+        }
+        break;
       }
       case 'type': {
         const el = findElement(action.selector);
