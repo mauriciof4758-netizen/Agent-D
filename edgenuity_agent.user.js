@@ -32,6 +32,17 @@
 You are an autonomous agent completing Edgenuity coursework inside a real browser.
 The page is split across multiple documents. Here is exactly what each contains:
 
+LESSON STRUCTURE — CRITICAL:
+Edgenuity lessons contain MULTIPLE activity sections in sequence, for example:
+  Warm-Up → Instruction → Summary → Quiz → Unit Test
+Completing all frames in ONE activity does NOT mean the lesson is done.
+After all frames are FrameComplete, look at activityNav in the page state for a
+"Next", "Go to", or "Continue" button in the outer player and click it to advance
+to the next activity section. Keep going until there is truly nothing left.
+Only use {"action":"done"} when bodyText explicitly shows the lesson or unit test
+is 100% complete (e.g. "You have completed" or "Unit Test submitted" message),
+or when activityNav is empty and all activities are done.
+
 NAVIGATION CONTROLS (in the FrameChain document):
 - span#btnCheck        = "Done" / Check answer — click to submit the current answer
 - span#btnEntryAudio   = plays intro audio
@@ -92,9 +103,13 @@ WORKFLOW:
 7. If span.TextAnswerIncorrect is present → wrong answer — retry with a different, REAL answer.
 8. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
 9. Informational slides (no inputs, no draggables) → click li.FrameRight or span#btnCheck.
-10. When ALL frames are FrameComplete → activity is finished.
-11. Never touch elements inside #ea-panel.
-12. Return ONLY a single JSON object — no markdown fences, no explanation.
+10. When ALL frames are FrameComplete → this ONE activity section is done.
+    Check activityNav for a "Next", "Continue", or "Go to" button and click it to start
+    the next activity section. Do NOT use {"action":"done"} yet.
+11. Only use {"action":"done"} when the entire lesson is genuinely complete —
+    bodyText says something like "You have completed" or activityNav has no more buttons.
+12. Never touch elements inside #ea-panel.
+13. Return ONLY a single JSON object — no markdown fences, no explanation.
 
 Available actions:
   {"action":"click","selector":"<CSS>","reason":"<why>"}
@@ -350,11 +365,12 @@ Available actions:
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) return null;
         return {
-          tag:  el.tagName.toLowerCase(),
-          id:   el.id || undefined,
-          cls:  (el.className || '').slice(0, 80),
-          text: (el.innerText || el.value || el.placeholder || '').trim().slice(0, 120),
-          type: el.type || undefined,
+          tag:   el.tagName.toLowerCase(),
+          id:    el.id || undefined,
+          cls:   (el.className || '').slice(0, 80),
+          text:  (el.innerText || '').trim().slice(0, 120) || undefined,
+          value: el.value || undefined,
+          type:  el.type || undefined,
         };
       } catch(e) { return null; }
     }
@@ -400,6 +416,27 @@ Available actions:
 
     const answerChoices = getAnswerChoices();
 
+    // Inter-activity navigation — buttons in the outer player (doc[0]) that move
+    // between activity sections (Warm-Up → Instruction → Quiz → Unit Test etc.)
+    // Input buttons expose their label via .value, not .innerText, so we read both.
+    const outerDoc = document; // doc[0] is always the top window document
+    const activityNav = [...outerDoc.querySelectorAll(
+      'input[type="button"], input[type="submit"], input[type="image"], ' +
+      'a[class*="nav"], a[href*="Activity"], button, [class*="next"], [class*="continue"]'
+    )].filter(outside).map(el => {
+      try {
+        const label = (el.value || el.innerText || el.getAttribute('title') || '').trim();
+        if (!label) return null;
+        return {
+          tag:      el.tagName.toLowerCase(),
+          id:       el.id || undefined,
+          cls:      (el.className || '').slice(0, 60),
+          label,
+          selector: el.id ? `#${el.id}` : (el.className ? el.tagName.toLowerCase() + '.' + (el.className||'').trim().split(/\s+/)[0] : el.tagName.toLowerCase()),
+        };
+      } catch(e) { return null; }
+    }).filter(Boolean).slice(0, 10);
+
     const bodyText = getAllDocs()
       .map(doc => (doc.body?.innerText || '').replace(/\s+/g, ' ').trim())
       .filter(Boolean).join('\n---\n').slice(0, 4000);
@@ -413,6 +450,7 @@ Available actions:
       completedFrames,
       totalFrames,
       answerChoices,
+      activityNav,
       navButtons,
       otherButtons,
       inputs,
