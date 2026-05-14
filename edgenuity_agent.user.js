@@ -44,6 +44,18 @@ Only use {"action":"done"} when bodyText says the lesson is 100% finished
 (e.g. "You have completed" / "Unit Test submitted"), or activityNav is empty
 and no frames remain.
 
+QUIZ / UNIT TEST (AssessmentViewer page — URL contains "AssessmentViewer"):
+The page state will include isAssessment:true, currentQuestion, and totalQuestions.
+- ol#navBtnList a    = question number buttons (shows which question you are on)
+- a#nextQuestion     = "Next" — advances to the next question; the agent auto-clicks
+                       this after you select an answer, so you only need to use clickChoice
+- a#saveAndExit      = "Save and Exit" — do NOT click this
+- Submit button      = only present/clickable once all questions are answered; the agent
+                       auto-submits when currentQuestion === totalQuestions
+CRITICAL: NEVER click Submit until you have answered every question (currentQuestion must equal totalQuestions).
+For each question: read bodyText for the question text, then use clickChoice to pick the answer.
+The code will automatically advance to the next question after you select an answer.
+
 NAVIGATION CONTROLS (in the FrameChain document):
 - span#btnCheck        = "Done" / Check answer — click to submit the current answer
 - span#btnEntryAudio   = plays intro audio
@@ -380,11 +392,14 @@ Available actions:
     const panelEl = document.getElementById('ea-panel');
     const outside = el => !panelEl || !panelEl.contains(el);
 
-    // Known Edgenuity-specific selectors from debug scan
+    // Known Edgenuity-specific selectors — covers both FrameChain and AssessmentViewer
     const navButtons = queryAll(
+      // FrameChain activity controls:
       'span#btnCheck, span#btnEntryAudio, span#btnExitAudio, span#btnHint, span#btnShowMe,' +
       'li.FrameRight, li.FrameLeft, li.FrameCurrent, li.FrameComplete, li[id^="frame"],' +
-      'div.done-start, div.done-complete, div.done-retry'
+      'div.done-start, div.done-complete, div.done-retry,' +
+      // AssessmentViewer controls:
+      'a#nextQuestion, a#saveAndExit, ol#navBtnList a'
     ).filter(outside).map(describeEl).filter(Boolean);
 
     // Broad fallback selectors
@@ -415,6 +430,13 @@ Available actions:
     const hasRightAnswer  = !!findElement('span.TextAnswerCorrect');
     const completedFrames = queryAll('li.FrameComplete').length;
     const totalFrames     = queryAll('li[id^="frame"]').length;
+
+    // AssessmentViewer (quiz/test) state
+    const isAssessment    = !!findElement('ol#navBtnList');
+    const qNavBtns        = queryAll('ol#navBtnList a.plainbtn:not([class*="gray"])');
+    const totalQuestions  = qNavBtns.length;
+    const selQBtn         = [...qNavBtns].find(el => /\bselected\b/.test(el.className));
+    const currentQuestion = selQBtn ? (parseInt(selQBtn.innerText) || 1) : (isAssessment ? 1 : 0);
 
     const answerChoices = getAnswerChoices();
 
@@ -460,6 +482,9 @@ Available actions:
       hasRightAnswer,
       completedFrames,
       totalFrames,
+      isAssessment,
+      currentQuestion,
+      totalQuestions,
       answerChoices,
       activityNav,
       navButtons,
@@ -675,6 +700,52 @@ Available actions:
       loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
       return;
     }
+
+    // ── Assessment fast path: auto-navigate between quiz/test questions ─────────
+    // The LLM only needs to select answers (clickChoice). This code advances
+    // to the next question after each answer is chosen, and auto-submits at the end.
+    {
+      const isAssessment = !!findElement('ol#navBtnList');
+      if (isAssessment) {
+        const qBtns   = queryAll('ol#navBtnList a.plainbtn:not([class*="gray"])');
+        const totalQ  = qBtns.length;
+        const selBtn  = [...qBtns].find(el => /\bselected\b/.test(el.className));
+        const curQ    = selBtn ? (parseInt(selBtn.innerText) || 1) : 1;
+
+        // Detect if current question has a selected answer
+        const answered = queryAll('input.answer-choice-button:checked').length > 0
+                      || queryAll('input[type="radio"]:checked, input[type="checkbox"]:checked').length > 0
+                      || queryAll('div.answer-choice.selected, div.answer-choice.correct, div.answer-choice.checked').length > 0;
+
+        if (answered) {
+          if (curQ < totalQ) {
+            const nextBtn = findElement('a#nextQuestion');
+            if (nextBtn) {
+              log(`Q${curQ}/${totalQ} answered — next question (fast)`, 'ok');
+              setStatus(`Quiz Q${curQ}/${totalQ}`, true);
+              simulateClick(nextBtn);
+              await sleep(800);
+              if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+              return;
+            }
+          } else {
+            // Last question answered — find and click Submit
+            const submitBtn = [...queryAll('span.buttons a, span.buttons input, span.buttons button')]
+              .find(el => /submit/i.test(el.innerText || el.value || ''));
+            if (submitBtn) {
+              log(`All ${totalQ} questions answered — submitting quiz`, 'ok');
+              setStatus('Submitting…', true);
+              simulateClick(submitBtn);
+              await sleep(3000);
+              if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+              return;
+            }
+          }
+        }
+        // No answer yet — fall through to LLM to pick one
+      }
+    }
+    // ── End assessment fast path ─────────────────────────────────────────────
 
     // ── Fast path: no LLM call needed for pure informational slides ───────────
     {
