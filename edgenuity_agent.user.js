@@ -54,6 +54,7 @@ CONTENT (in the media.edgenuity.com document):
 - div.dropContainer, .ui-droppable = drop zone categories (e.g. #sbgCata, #sbgCatb)
 - div.done-start                   = sort activity is ready — tiles can now be dragged
 - div.done-complete                = ALL tiles verified correct — click li.FrameRight to advance
+- div.done-retry                   = your written answer was WRONG — clear it, write a DIFFERENT real answer, and click span#btnCheck again
 - [draggable="true"]               = drag this element to its matching drop zone
 
 MULTIPLE-CHOICE QUESTIONS:
@@ -70,14 +71,25 @@ SORT / CATEGORIZE ACTIVITIES:
 - Tiles with .dropped.checked are done — skip them.
 - When div.done-complete is visible, click li.FrameRight to advance (NOT span#btnCheck).
 
+WRITTEN / ESSAY ANSWERS — CRITICAL RULES:
+When you see an input or textarea that requires a typed answer:
+- Read bodyText carefully to understand exactly what the question is asking.
+- Use your own knowledge of the subject to write a REAL, CORRECT, COMPLETE answer.
+- NEVER type placeholder text such as "Answer to the question", "Sample answer", "[answer here]",
+  "I don't know", or anything vague. That will be marked wrong.
+- Write a substantive answer as if you are a knowledgeable student who wants full credit.
+- For short-answer prompts: 1–3 complete sentences with specific details.
+- For fill-in-the-blank (single word/phrase): type only the word or phrase that fits.
+
 WORKFLOW:
 1. If mediaPlaying is true → wait 5 seconds.
-2. Fill-in-the-blank: type the correct answer into input/textarea, then click span#btnCheck.
+2. Fill-in-the-blank / short answer: read the question from bodyText, then type the REAL answer
+   into the input/textarea using the "type" action, then click span#btnCheck.
 3. Single-answer multiple choice (radio): use clickChoice for ONE answer, then click span#btnCheck.
 4. Select-all-that-apply (checkbox): use clickChoice for EACH correct answer, then click span#btnCheck.
 5. Sort/categorize: drag unplaced tiles to correct drop zones; click li.FrameRight when done-complete appears.
 6. Other drag-and-drop: drag each item to its correct target, then click span#btnCheck.
-7. If span.TextAnswerIncorrect is present → wrong answer — retry with a different selection.
+7. If span.TextAnswerIncorrect is present → wrong answer — retry with a different, REAL answer.
 8. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
 9. Informational slides (no inputs, no draggables) → click li.FrameRight or span#btnCheck.
 10. When ALL frames are FrameComplete → activity is finished.
@@ -354,7 +366,7 @@ Available actions:
     const navButtons = queryAll(
       'span#btnCheck, span#btnEntryAudio, span#btnExitAudio, span#btnHint, span#btnShowMe,' +
       'li.FrameRight, li.FrameLeft, li.FrameCurrent, li.FrameComplete, li[id^="frame"],' +
-      'div.done-start, div.done-complete'
+      'div.done-start, div.done-complete, div.done-retry'
     ).filter(outside).map(describeEl).filter(Boolean);
 
     // Broad fallback selectors
@@ -505,18 +517,18 @@ Available actions:
   const SUBMIT_SELECTORS = ['#btnCheck', 'span#btnCheck'];
 
   async function verifySubmit() {
-    // Wait for page to react to the submission
     await sleep(2000);
-    const wrong   = !!findElement('span.TextAnswerIncorrect');
-    const correct = !!findElement('span.TextAnswerCorrect');
+    const wrong   = !!findElement('span.TextAnswerIncorrect') || !!findElement('div.done-retry');
+    const correct = !!findElement('span.TextAnswerCorrect')   || !!findElement('div.done-complete');
     if (wrong) {
       log('❌ Wrong answer detected — injecting correction notice', 'error');
-      // Force the LLM to reconsider by pushing a system-level correction into history
       history.push({
         role: 'user',
-        content: '⚠️ VERIFICATION FAILED: span.TextAnswerIncorrect is on screen. ' +
-                 'Your last answer was WRONG. You must clear the field, type a DIFFERENT answer, ' +
-                 'and click span#btnCheck again. Do NOT advance to the next frame yet.',
+        content: '⚠️ VERIFICATION FAILED: your last answer was WRONG ' +
+                 '(span.TextAnswerIncorrect or div.done-retry is on screen). ' +
+                 'Clear the field, write a COMPLETELY DIFFERENT and more specific answer, ' +
+                 'and click span#btnCheck again. Do NOT advance to the next frame yet. ' +
+                 'Do NOT type placeholder text — give a real, substantive answer based on the question.',
       });
     } else if (correct) {
       log('✅ Answer verified correct', 'ok');
