@@ -628,7 +628,6 @@ Available actions:
         break;
       }
       case 'clickChoice': {
-        // Click an answer choice by its visible label text (for checkbox/radio questions)
         const target = (action.text || '').trim().toLowerCase();
         let clicked = false;
         for (const div of queryAll('div.answer-choice')) {
@@ -640,7 +639,14 @@ Available actions:
             break;
           }
         }
-        if (!clicked) log(`clickChoice failed — no label matching: "${action.text}"`, 'warn');
+        if (!clicked) {
+          log(`clickChoice failed — no label matching: "${action.text}"`, 'warn');
+        } else if (findElement('ol#navBtnList')) {
+          // Mark this question as answered by the agent so the fast path can advance
+          const qBtns  = queryAll('ol#navBtnList a.plainbtn:not([class*="gray"])');
+          const selBtn = [...qBtns].find(el => /\bselected\b/.test(el.className));
+          assessmentAnsweredQ = selBtn ? (parseInt(selBtn.innerText) || 1) : 1;
+        }
         await sleep(ACTION_DELAY_MS);
         break;
       }
@@ -690,6 +696,7 @@ Available actions:
 
   let running = false, loopHandle = null;
   const history = [];
+  let assessmentAnsweredQ = 0; // tracks which question number the agent last answered
 
   async function agentTick() {
     if (!running) return;
@@ -712,12 +719,11 @@ Available actions:
         const selBtn  = [...qBtns].find(el => /\bselected\b/.test(el.className));
         const curQ    = selBtn ? (parseInt(selBtn.innerText) || 1) : 1;
 
-        // Detect if current question has a selected answer
-        const answered = queryAll('input.answer-choice-button:checked').length > 0
-                      || queryAll('input[type="radio"]:checked, input[type="checkbox"]:checked').length > 0
-                      || queryAll('div.answer-choice.selected, div.answer-choice.correct, div.answer-choice.checked').length > 0;
-
-        if (answered) {
+        // Only advance after the agent itself has answered this question.
+        // Checking DOM :checked state is unreliable — Edgenuity often has a radio
+        // pre-checked on page load (previous attempt), causing false positives.
+        // assessmentAnsweredQ is set in clickChoice/click after the agent acts.
+        if (assessmentAnsweredQ === curQ) {
           if (curQ < totalQ) {
             const nextBtn = findElement('a#nextQuestion');
             if (nextBtn) {
@@ -855,7 +861,7 @@ Available actions:
       log('Please paste your Groq API key and click Save first.', 'error'); return;
     }
     GM_setValue(STORAGE_KEY_AUTORUN, true);
-    running = true; history.length = 0;
+    running = true; history.length = 0; assessmentAnsweredQ = 0;
     document.getElementById('ea-start-btn').disabled = true;
     document.getElementById('ea-stop-btn').disabled  = false;
     log(auto ? '🔄 Auto-resumed on new activity page.' : 'Agent started.', 'ok');
