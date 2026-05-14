@@ -46,20 +46,31 @@ CONTENT (in the media.edgenuity.com document):
 - select                           = dropdown answer
 - span.TextAnswerIncorrect         = your last answer was WRONG — try again with a different answer
 - span.TextAnswerCorrect           = correct!
+- div.sbgTile, .ui-draggable       = draggable tiles for sort/categorize activities
+- div.dropContainer, .ui-droppable = drop zone categories (e.g. #sbgCata, #sbgCatb)
+- div.done-start                   = "Done" completion button inside the content frame (only for sort activities)
 - [draggable="true"]               = drag this element to its matching drop zone
-- [class*="drop"],[class*="blank"] = drop targets for drag questions
+
+SORT / CATEGORIZE ACTIVITIES:
+- Read bodyText carefully — the category names (e.g. "Buying", "Renting") appear as headings near the drop zones.
+- Each div.sbgTile has text describing a characteristic — drag it to the matching div.dropContainer.
+- Use {"action":"drag","fromSelector":"div.sbgTile:nth-of-type(N)","toSelector":"div#sbgCata","reason":"..."}
+  or use a CSS selector targeting the tile by its text content if possible, otherwise nth-of-type.
+- After ALL tiles are placed, click div.done-start (NOT span#btnCheck) to complete the activity.
+- Tiles still showing .incorrect class have NOT been correctly placed yet.
 
 WORKFLOW:
 1. If mediaPlaying is true → wait 5 seconds.
 2. Fill-in-the-blank: type the correct answer into input/textarea, then click span#btnCheck.
 3. Multiple choice: click the correct answer option, then click span#btnCheck.
-4. Drag-and-drop: drag each item to its correct target, then click span#btnCheck.
-5. If span.TextAnswerIncorrect is present → previous answer was wrong, try a different answer.
-6. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
-7. Informational slides (no inputs, no wrong answer) → just click li.FrameRight or span#btnCheck.
-8. When ALL frames are FrameComplete → activity is finished.
-9. Never touch elements inside #ea-panel.
-10. Return ONLY a single JSON object — no markdown fences, no explanation.
+4. Sort/categorize drag activity: drag each tile to its correct drop zone, then click div.done-start.
+5. Other drag-and-drop: drag each item to its correct target, then click span#btnCheck.
+6. If span.TextAnswerIncorrect is present → previous answer was wrong, try a different answer.
+7. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
+8. Informational slides (no inputs, no wrong answer) → just click li.FrameRight or span#btnCheck.
+9. When ALL frames are FrameComplete → activity is finished.
+10. Never touch elements inside #ea-panel.
+11. Return ONLY a single JSON object — no markdown fences, no explanation.
 
 Available actions:
   {"action":"click","selector":"<CSS>","reason":"<why>"}
@@ -310,7 +321,8 @@ Available actions:
     // Known Edgenuity-specific selectors from debug scan
     const navButtons = queryAll(
       'span#btnCheck, span#btnEntryAudio, span#btnExitAudio, span#btnHint, span#btnShowMe,' +
-      'li.FrameRight, li.FrameLeft, li.FrameCurrent, li.FrameComplete, li[id^="frame"]'
+      'li.FrameRight, li.FrameLeft, li.FrameCurrent, li.FrameComplete, li[id^="frame"],' +
+      'div.done-start'
     ).filter(outside).map(describeEl).filter(Boolean);
 
     // Broad fallback selectors
@@ -327,11 +339,13 @@ Available actions:
     ).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
 
     const draggables = queryAll(
-      '[draggable="true"], [class*="drag"], [class*="token"], [class*="word"], [class*="card"]'
+      '[draggable="true"], [class*="drag"], [class*="token"], [class*="word"], [class*="card"],' +
+      'div.sbgTile, .ui-draggable'
     ).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
 
     const dropzones = queryAll(
-      '[class*="drop"], [class*="blank"], [class*="slot"], [class*="target"], [ondrop]'
+      '[class*="drop"], [class*="blank"], [class*="slot"], [class*="target"], [ondrop],' +
+      '.ui-droppable, .dropContainer'
     ).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
 
     // Check for wrong/correct answer state
@@ -430,18 +444,26 @@ Available actions:
     const fR = fromEl.getBoundingClientRect(), tR = toEl.getBoundingClientRect();
     const fx = fR.left + fR.width/2, fy = fR.top + fR.height/2;
     const tx = tR.left + tR.width/2, ty = tR.top + tR.height/2;
-    const dt = new DataTransfer();
-    fromEl.dispatchEvent(new DragEvent('dragstart', {bubbles:true, dataTransfer:dt, clientX:fx, clientY:fy}));
-    toEl.dispatchEvent(  new DragEvent('dragenter', {bubbles:true, dataTransfer:dt, clientX:tx, clientY:ty}));
-    toEl.dispatchEvent(  new DragEvent('dragover',  {bubbles:true, dataTransfer:dt, clientX:tx, clientY:ty}));
-    toEl.dispatchEvent(  new DragEvent('drop',      {bubbles:true, dataTransfer:dt, clientX:tx, clientY:ty}));
-    fromEl.dispatchEvent(new DragEvent('dragend',   {bubbles:true, dataTransfer:dt, clientX:tx, clientY:ty}));
-    fromEl.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, clientX:fx, clientY:fy}));
-    for (let i = 1; i <= 10; i++) {
-      document.dispatchEvent(new MouseEvent('mousemove', {bubbles:true,
-        clientX: fx + (tx-fx)*i/10, clientY: fy + (ty-fy)*i/10}));
+
+    // jQuery UI drag: mousedown on element, mousemove+mouseup on the element's own document
+    // (NOT the top document — the iframe has its own jQuery UI event listeners)
+    const ownerDoc = fromEl.ownerDocument;
+    fromEl.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, clientX:fx, clientY:fy}));
+    for (let i = 1; i <= 15; i++) {
+      ownerDoc.dispatchEvent(new MouseEvent('mousemove', {bubbles:true, cancelable:true,
+        clientX: fx + (tx-fx)*i/15, clientY: fy + (ty-fy)*i/15}));
     }
-    toEl.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, clientX:tx, clientY:ty}));
+    ownerDoc.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, clientX:tx, clientY:ty}));
+
+    // HTML5 drag events as a fallback for non-jQuery drag libraries
+    try {
+      const dt = new DataTransfer();
+      fromEl.dispatchEvent(new DragEvent('dragstart', {bubbles:true, dataTransfer:dt, clientX:fx, clientY:fy}));
+      toEl.dispatchEvent(  new DragEvent('dragenter', {bubbles:true, dataTransfer:dt, clientX:tx, clientY:ty}));
+      toEl.dispatchEvent(  new DragEvent('dragover',  {bubbles:true, dataTransfer:dt, clientX:tx, clientY:ty}));
+      toEl.dispatchEvent(  new DragEvent('drop',      {bubbles:true, dataTransfer:dt, clientX:tx, clientY:ty}));
+      fromEl.dispatchEvent(new DragEvent('dragend',   {bubbles:true, dataTransfer:dt, clientX:tx, clientY:ty}));
+    } catch(e) {}
   }
 
   // Selectors that count as "submitting an answer" — trigger post-submit verification
