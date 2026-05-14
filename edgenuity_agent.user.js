@@ -278,7 +278,8 @@ Available actions:
         const role = el.getAttribute('role')||'';
         const drag = el.getAttribute('draggable')==='true' ? ' draggable' : '';
         const txt  = (el.innerText||'').trim().slice(0,40);
-        return `  ${el.tagName.toLowerCase()}${id} class="${cls}" role="${role}"${drag} text="${txt}"`;
+        const val  = el.tagName === 'INPUT' && el.value ? ` value="${el.value.slice(0,30)}"` : '';
+        return `  ${el.tagName.toLowerCase()}${id} class="${cls}" role="${role}"${drag}${val} text="${txt}"`;
       }).slice(0,30);
 
       if (custom.length) { cap(`  custom elements (${custom.length}):`, 'warn'); custom.forEach(c => cap(c, 'warn')); }
@@ -644,7 +645,15 @@ Available actions:
         await sleep(secs * 1000); break;
       }
       case 'done': {
-        log('✅ ' + action.reason, 'ok');
+        // Guard: don't stop if frames exist but none are confirmed complete
+        // (LLM might call done too early when it can't find nav buttons)
+        const fr = queryAll('li[id^="frame"]').length;
+        const fc = queryAll('li.FrameComplete').length;
+        if (fr > 0 && fc < fr) {
+          log('⚠️ LLM called done but frames remain — ignoring', 'warn');
+          break;
+        }
+        log('🎓 ' + action.reason, 'ok');
         stopAgent(true); break;
       }
       default:
@@ -668,8 +677,6 @@ Available actions:
     }
 
     // ── Fast path: no LLM call needed for pure informational slides ───────────
-    // Condition: no user input required, current frame not yet complete,
-    // more frames remain (not time to navigate to next activity yet).
     {
       const completedNow = queryAll('li.FrameComplete').length;
       const totalNow     = queryAll('li[id^="frame"]').length;
@@ -681,9 +688,52 @@ Available actions:
       const frameRight   = findElement('li.FrameRight');
       const allDone      = totalNow > 0 && completedNow >= totalNow;
 
-      if (!needsInput && !allDone && frameRight) {
+      // ── All frames complete → deterministic activity transition ─────────────
+      if (allDone) {
+        setStatus('Activity done — moving to next…', true);
+
+        // Step 1: click FrameRight once to let Edgenuity close out the activity
+        if (frameRight) {
+          log('All frames done — clicking FrameRight to exit activity', 'ok');
+          simulateClick(frameRight);
+          await sleep(1800);
+          if (!running) return;
+        }
+
+        // Step 2: find the next-activity button in the outer player (doc[0]).
+        // Edgenuity uses input.uibtn elements; the primary action is usually
+        // input#saveButton or input.uibtn-blue. Try value text first, then fall
+        // back to the blue/primary button, then the last uibtn on the page.
+        const panelEl = document.getElementById('ea-panel');
+        const uibtns  = [...document.querySelectorAll('input[class*="uibtn"], input[type="button"], input[type="submit"]')]
+                          .filter(el => !panelEl?.contains(el));
+
+        let nextBtn = null;
+        for (const el of uibtns) {
+          const v = (el.value || '').toLowerCase();
+          if (v && (v.includes('next') || v.includes('go') || v.includes('continue') || v.includes('start') || v.includes('begin'))) {
+            nextBtn = el; break;
+          }
+        }
+        if (!nextBtn) nextBtn = document.querySelector('input#saveButton, input.uibtn-blue');
+        if (!nextBtn && uibtns.length) nextBtn = uibtns[uibtns.length - 1]; // last button is usually "Next"
+
+        if (nextBtn) {
+          const lbl = nextBtn.value || nextBtn.id || nextBtn.className;
+          log(`Next-activity button: "${lbl}" — clicking`, 'ok');
+          simulateClick(nextBtn);
+          await sleep(2500); // wait for page navigation or new activity to load
+        } else {
+          log('No next-activity button found — waiting for page to update', 'warn');
+        }
+
+        if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+        return;
+      }
+      // ── End activity transition ───────────────────────────────────────────────
+
+      if (!needsInput && frameRight) {
         if (currentDone) {
-          // Frame already marked complete — just advance
           log('Frame complete — advancing (fast)', 'info');
           setStatus('Advancing…', true);
           simulateClick(frameRight);
@@ -691,7 +741,6 @@ Available actions:
           if (running) loopHandle = setTimeout(agentTick, 800);
           return;
         }
-        // No interaction on this frame — click Done then advance
         const btnCheck = findElement('span#btnCheck');
         if (btnCheck) {
           log('Info slide — Done + advance (fast)', 'info');
