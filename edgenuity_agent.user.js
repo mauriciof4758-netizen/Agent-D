@@ -22,8 +22,8 @@
   // ─── Configuration ────────────────────────────────────────────────────────
 
   const STORAGE_KEY_API  = 'edgenuity_agent_apikey';
-  const POLL_INTERVAL_MS = 3000;
-  const ACTION_DELAY_MS  = 1200;
+  const POLL_INTERVAL_MS = 1500;
+  const ACTION_DELAY_MS  = 800;
 
   // ─── System prompt ────────────────────────────────────────────────────────
   // Based on real debug scan of Edgenuity's DOM structure
@@ -33,15 +33,15 @@ You are an autonomous agent completing Edgenuity coursework inside a real browse
 The page is split across multiple documents. Here is exactly what each contains:
 
 LESSON STRUCTURE — CRITICAL:
-Edgenuity lessons contain MULTIPLE activity sections in sequence, for example:
+Edgenuity lessons contain MULTIPLE activity sections in sequence:
   Warm-Up → Instruction → Summary → Quiz → Unit Test
-Completing all frames in ONE activity does NOT mean the lesson is done.
-After all frames are FrameComplete, look at activityNav in the page state for a
-"Next", "Go to", or "Continue" button in the outer player and click it to advance
-to the next activity section. Keep going until there is truly nothing left.
-Only use {"action":"done"} when bodyText explicitly shows the lesson or unit test
-is 100% complete (e.g. "You have completed" or "Unit Test submitted" message),
-or when activityNav is empty and all activities are done.
+You must complete ALL of them. activityNav in the page state lists the buttons to
+move between sections — it is only populated once all frames in the current section
+are complete. When activityNav is non-empty, click the most appropriate button
+(usually "Next" or "Go to…") to advance to the next section.
+Only use {"action":"done"} when bodyText says the lesson is 100% finished
+(e.g. "You have completed" / "Unit Test submitted"), or activityNav is empty
+and no frames remain.
 
 NAVIGATION CONTROLS (in the FrameChain document):
 - span#btnCheck        = "Done" / Check answer — click to submit the current answer
@@ -416,11 +416,11 @@ Available actions:
 
     const answerChoices = getAnswerChoices();
 
-    // Inter-activity navigation — buttons in the outer player (doc[0]) that move
-    // between activity sections (Warm-Up → Instruction → Quiz → Unit Test etc.)
-    // Input buttons expose their label via .value, not .innerText, so we read both.
-    const outerDoc = document; // doc[0] is always the top window document
-    const activityNav = [...outerDoc.querySelectorAll(
+    // Inter-activity navigation — only shown to the LLM after ALL frames are complete.
+    // Hiding it until then prevents the agent from jumping to the next activity too early.
+    const outerDoc = document;
+    const allFramesDone = totalFrames > 0 && completedFrames >= totalFrames;
+    const activityNav = allFramesDone ? [...outerDoc.querySelectorAll(
       'input[type="button"], input[type="submit"], input[type="image"], ' +
       'a[class*="nav"], a[href*="Activity"], button, [class*="next"], [class*="continue"]'
     )].filter(outside).map(el => {
@@ -435,7 +435,7 @@ Available actions:
           selector: el.id ? `#${el.id}` : (el.className ? el.tagName.toLowerCase() + '.' + (el.className||'').trim().split(/\s+/)[0] : el.tagName.toLowerCase()),
         };
       } catch(e) { return null; }
-    }).filter(Boolean).slice(0, 10);
+    }).filter(Boolean).slice(0, 10) : [];
 
     const bodyText = getAllDocs()
       .map(doc => (doc.body?.innerText || '').replace(/\s+/g, ' ').trim())
@@ -656,6 +656,46 @@ Available actions:
       loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
       return;
     }
+
+    // ── Fast path: no LLM call needed for pure informational slides ───────────
+    // Condition: no user input required, current frame not yet complete,
+    // more frames remain (not time to navigate to next activity yet).
+    {
+      const completedNow = queryAll('li.FrameComplete').length;
+      const totalNow     = queryAll('li[id^="frame"]').length;
+      const needsInput   = queryAll('input[type="text"],input[type="radio"],input[type="checkbox"],textarea,select,div.answer-choice').length > 0
+                        || queryAll('div.sbgTile:not(.checked)').length > 0
+                        || !!findElement('span.TextAnswerIncorrect')
+                        || !!findElement('div.done-retry');
+      const currentDone  = !!findElement('li.FrameCurrent.FrameComplete');
+      const frameRight   = findElement('li.FrameRight');
+      const allDone      = totalNow > 0 && completedNow >= totalNow;
+
+      if (!needsInput && !allDone && frameRight) {
+        if (currentDone) {
+          // Frame already marked complete — just advance
+          log('Frame complete — advancing (fast)', 'info');
+          setStatus('Advancing…', true);
+          simulateClick(frameRight);
+          await sleep(700);
+          if (running) loopHandle = setTimeout(agentTick, 800);
+          return;
+        }
+        // No interaction on this frame — click Done then advance
+        const btnCheck = findElement('span#btnCheck');
+        if (btnCheck) {
+          log('Info slide — Done + advance (fast)', 'info');
+          setStatus('Advancing…', true);
+          simulateClick(btnCheck);
+          await sleep(900);
+          const fr = findElement('li.FrameRight');
+          if (fr) { simulateClick(fr); await sleep(700); }
+          if (running) loopHandle = setTimeout(agentTick, 800);
+          return;
+        }
+      }
+    }
+    // ── End fast path ─────────────────────────────────────────────────────────
 
     setStatus('Thinking…', true);
     const state = getPageState();
