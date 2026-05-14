@@ -37,9 +37,11 @@ NAVIGATION CONTROLS (in the FrameChain document):
 - span#btnEntryAudio   = plays intro audio
 - span#btnExitAudio    = plays final/exit audio
 - li.FrameRight        = advances to the next frame/slide
+- li.FrameRight.FrameHighlight = next frame is ready — click this to advance
 - li.FrameLeft         = goes back one frame
 - li.FrameCurrent      = the currently active frame
 - li.FrameComplete     = a frame that is already done
+- li.FrameCurrent.FrameComplete = current frame is complete — click li.FrameRight to move on
 
 CONTENT (in the media.edgenuity.com document):
 - input, textarea                  = text answer fields — type the answer here
@@ -47,23 +49,26 @@ CONTENT (in the media.edgenuity.com document):
 - span.TextAnswerIncorrect         = your last answer was WRONG — try again with a different answer
 - span.TextAnswerCorrect           = correct!
 - div.sbgTile, .ui-draggable       = draggable tiles for sort/categorize activities
+- div.sbgTile.dropped.checked      = tile has been placed correctly (do NOT move again)
+- div.sbgTile.incorrect            = tile has NOT been correctly placed yet — must still drag it
 - div.dropContainer, .ui-droppable = drop zone categories (e.g. #sbgCata, #sbgCatb)
-- div.done-start                   = "Done" completion button inside the content frame (only for sort activities)
+- div.done-start                   = sort activity is ready — tiles can now be dragged
+- div.done-complete                = ALL tiles verified correct — do NOT click this, just click li.FrameRight to advance
 - [draggable="true"]               = drag this element to its matching drop zone
 
 SORT / CATEGORIZE ACTIVITIES:
-- Read bodyText carefully — the category names (e.g. "Buying", "Renting") appear as headings near the drop zones.
-- Each div.sbgTile has text describing a characteristic — drag it to the matching div.dropContainer.
-- Use {"action":"drag","fromSelector":"div.sbgTile:nth-of-type(N)","toSelector":"div#sbgCata","reason":"..."}
-  or use a CSS selector targeting the tile by its text content if possible, otherwise nth-of-type.
-- After ALL tiles are placed, click div.done-start (NOT span#btnCheck) to complete the activity.
-- Tiles still showing .incorrect class have NOT been correctly placed yet.
+- Read bodyText carefully — the category names (e.g. "Buying", "Renting") appear as headings near or inside the drop zones.
+- Each div.sbgTile with .incorrect (or no .dropped) needs to be dragged to the correct div.dropContainer.
+- Tiles showing .dropped.checked are already done — skip them.
+- When div.done-complete is visible, all tiles are correct. Click li.FrameRight (or li.FrameRight.FrameHighlight) to advance.
+- Do NOT click span#btnCheck for sort activities — it is not needed.
 
 WORKFLOW:
 1. If mediaPlaying is true → wait 5 seconds.
 2. Fill-in-the-blank: type the correct answer into input/textarea, then click span#btnCheck.
 3. Multiple choice: click the correct answer option, then click span#btnCheck.
-4. Sort/categorize drag activity: drag each tile to its correct drop zone, then click div.done-start.
+4. Sort/categorize drag activity: drag each tile (.sbgTile without .dropped.checked) to its correct drop zone.
+   When div.done-complete appears, all tiles are verified — click li.FrameRight to advance (not span#btnCheck).
 5. Other drag-and-drop: drag each item to its correct target, then click span#btnCheck.
 6. If span.TextAnswerIncorrect is present → previous answer was wrong, try a different answer.
 7. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
@@ -322,7 +327,7 @@ Available actions:
     const navButtons = queryAll(
       'span#btnCheck, span#btnEntryAudio, span#btnExitAudio, span#btnHint, span#btnShowMe,' +
       'li.FrameRight, li.FrameLeft, li.FrameCurrent, li.FrameComplete, li[id^="frame"],' +
-      'div.done-start'
+      'div.done-start, div.done-complete'
     ).filter(outside).map(describeEl).filter(Boolean);
 
     // Broad fallback selectors
