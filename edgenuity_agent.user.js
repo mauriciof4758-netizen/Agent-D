@@ -53,32 +53,40 @@ CONTENT (in the media.edgenuity.com document):
 - div.sbgTile.incorrect            = tile has NOT been correctly placed yet — must still drag it
 - div.dropContainer, .ui-droppable = drop zone categories (e.g. #sbgCata, #sbgCatb)
 - div.done-start                   = sort activity is ready — tiles can now be dragged
-- div.done-complete                = ALL tiles verified correct — do NOT click this, just click li.FrameRight to advance
+- div.done-complete                = ALL tiles verified correct — click li.FrameRight to advance
 - [draggable="true"]               = drag this element to its matching drop zone
 
+MULTIPLE-CHOICE QUESTIONS:
+The page state includes answerChoices[] — an array of all visible answer options.
+Each entry has: { index, text, type ("checkbox" or "radio"), checked (true/false) }
+- type "radio"    = pick EXACTLY ONE correct answer, then click span#btnCheck
+- type "checkbox" = pick ALL correct answers (there may be 2, 3, or more), then click span#btnCheck
+- Use action "clickChoice" with the exact label text to select each answer
+- Check answerChoices[].checked to avoid re-clicking already-selected options
+- Do NOT advance to the next frame until span#btnCheck has been clicked and no TextAnswerIncorrect is shown
+
 SORT / CATEGORIZE ACTIVITIES:
-- Read bodyText carefully — the category names (e.g. "Buying", "Renting") appear as headings near or inside the drop zones.
-- Each div.sbgTile with .incorrect (or no .dropped) needs to be dragged to the correct div.dropContainer.
-- Tiles showing .dropped.checked are already done — skip them.
-- When div.done-complete is visible, all tiles are correct. Click li.FrameRight (or li.FrameRight.FrameHighlight) to advance.
-- Do NOT click span#btnCheck for sort activities — it is not needed.
+- Read bodyText for category names; drag each unplaced tile to its correct div.dropContainer.
+- Tiles with .dropped.checked are done — skip them.
+- When div.done-complete is visible, click li.FrameRight to advance (NOT span#btnCheck).
 
 WORKFLOW:
 1. If mediaPlaying is true → wait 5 seconds.
 2. Fill-in-the-blank: type the correct answer into input/textarea, then click span#btnCheck.
-3. Multiple choice: click the correct answer option, then click span#btnCheck.
-4. Sort/categorize drag activity: drag each tile (.sbgTile without .dropped.checked) to its correct drop zone.
-   When div.done-complete appears, all tiles are verified — click li.FrameRight to advance (not span#btnCheck).
-5. Other drag-and-drop: drag each item to its correct target, then click span#btnCheck.
-6. If span.TextAnswerIncorrect is present → previous answer was wrong, try a different answer.
-7. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
-8. Informational slides (no inputs, no wrong answer) → just click li.FrameRight or span#btnCheck.
-9. When ALL frames are FrameComplete → activity is finished.
-10. Never touch elements inside #ea-panel.
-11. Return ONLY a single JSON object — no markdown fences, no explanation.
+3. Single-answer multiple choice (radio): use clickChoice for ONE answer, then click span#btnCheck.
+4. Select-all-that-apply (checkbox): use clickChoice for EACH correct answer, then click span#btnCheck.
+5. Sort/categorize: drag unplaced tiles to correct drop zones; click li.FrameRight when done-complete appears.
+6. Other drag-and-drop: drag each item to its correct target, then click span#btnCheck.
+7. If span.TextAnswerIncorrect is present → wrong answer — retry with a different selection.
+8. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
+9. Informational slides (no inputs, no draggables) → click li.FrameRight or span#btnCheck.
+10. When ALL frames are FrameComplete → activity is finished.
+11. Never touch elements inside #ea-panel.
+12. Return ONLY a single JSON object — no markdown fences, no explanation.
 
 Available actions:
   {"action":"click","selector":"<CSS>","reason":"<why>"}
+  {"action":"clickChoice","text":"<exact label text>","reason":"<why>"}
   {"action":"type","selector":"<CSS>","text":"<text to type>","reason":"<why>"}
   {"action":"select","selector":"<CSS of select>","value":"<option text or value>","reason":"<why>"}
   {"action":"drag","fromSelector":"<CSS>","toSelector":"<CSS>","reason":"<why>"}
@@ -303,6 +311,25 @@ Available actions:
     return false;
   }
 
+  // ─── Answer choice reader ─────────────────────────────────────────────────
+  // Reads all div.answer-choice elements — works even when inputs are CSS-hidden
+
+  function getAnswerChoices() {
+    const choices = [];
+    const divs = queryAll('div.answer-choice');
+    divs.forEach((div, i) => {
+      const input = div.querySelector('input.answer-choice-button, input[type="radio"], input[type="checkbox"]');
+      const label = div.querySelector('label.answer-choice-label, label');
+      choices.push({
+        index:   i + 1,
+        text:    (label?.innerText || '').trim(),
+        type:    input?.type || 'unknown',
+        checked: input?.checked || false,
+      });
+    });
+    return choices;
+  }
+
   // ─── Page state snapshot ──────────────────────────────────────────────────
 
   function getPageState() {
@@ -359,6 +386,8 @@ Available actions:
     const completedFrames = queryAll('li.FrameComplete').length;
     const totalFrames     = queryAll('li[id^="frame"]').length;
 
+    const answerChoices = getAnswerChoices();
+
     const bodyText = getAllDocs()
       .map(doc => (doc.body?.innerText || '').replace(/\s+/g, ' ').trim())
       .filter(Boolean).join('\n---\n').slice(0, 4000);
@@ -371,6 +400,7 @@ Available actions:
       hasRightAnswer,
       completedFrames,
       totalFrames,
+      answerChoices,
       navButtons,
       otherButtons,
       inputs,
@@ -509,6 +539,23 @@ Available actions:
         })) {
           await verifySubmit();
         }
+        break;
+      }
+      case 'clickChoice': {
+        // Click an answer choice by its visible label text (for checkbox/radio questions)
+        const target = (action.text || '').trim().toLowerCase();
+        let clicked = false;
+        for (const div of queryAll('div.answer-choice')) {
+          const label = div.querySelector('label.answer-choice-label, label');
+          if (label && label.innerText.trim().toLowerCase() === target) {
+            log(`Select choice: "${action.text}" — ${action.reason}`, 'ok');
+            simulateClick(label);
+            clicked = true;
+            break;
+          }
+        }
+        if (!clicked) log(`clickChoice failed — no label matching: "${action.text}"`, 'warn');
+        await sleep(ACTION_DELAY_MS);
         break;
       }
       case 'type': {
