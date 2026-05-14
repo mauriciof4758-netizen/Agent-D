@@ -21,9 +21,10 @@
 
   // ─── Configuration ────────────────────────────────────────────────────────
 
-  const STORAGE_KEY_API  = 'edgenuity_agent_apikey';
-  const POLL_INTERVAL_MS = 1500;
-  const ACTION_DELAY_MS  = 800;
+  const STORAGE_KEY_API     = 'edgenuity_agent_apikey';
+  const STORAGE_KEY_AUTORUN = 'edgenuity_agent_autorun';
+  const POLL_INTERVAL_MS    = 1500;
+  const ACTION_DELAY_MS     = 800;
 
   // ─── System prompt ────────────────────────────────────────────────────────
   // Based on real debug scan of Edgenuity's DOM structure
@@ -420,22 +421,31 @@ Available actions:
     // Hiding it until then prevents the agent from jumping to the next activity too early.
     const outerDoc = document;
     const allFramesDone = totalFrames > 0 && completedFrames >= totalFrames;
-    const activityNav = allFramesDone ? [...outerDoc.querySelectorAll(
-      'input[type="button"], input[type="submit"], input[type="image"], ' +
-      'a[class*="nav"], a[href*="Activity"], button, [class*="next"], [class*="continue"]'
-    )].filter(outside).map(el => {
-      try {
-        const label = (el.value || el.innerText || el.getAttribute('title') || '').trim();
-        if (!label) return null;
-        return {
-          tag:      el.tagName.toLowerCase(),
-          id:       el.id || undefined,
-          cls:      (el.className || '').slice(0, 60),
-          label,
-          selector: el.id ? `#${el.id}` : (el.className ? el.tagName.toLowerCase() + '.' + (el.className||'').trim().split(/\s+/)[0] : el.tagName.toLowerCase()),
-        };
-      } catch(e) { return null; }
-    }).filter(Boolean).slice(0, 10) : [];
+    const activityNav = allFramesDone ? (() => {
+      // Edgenuity uses input.uibtn (no explicit type attr) for Next/Previous buttons.
+      // We also catch standard button/link patterns as fallback.
+      const navEls = [...outerDoc.querySelectorAll(
+        'input[class*="uibtn"], input[type="button"], input[type="submit"], ' +
+        'input[type="image"], button, a[class*="nav"], a[href*="Activity"], ' +
+        '[class*="next"], [class*="continue"]'
+      )].filter(outside);
+      const results = navEls.map(el => {
+        try {
+          const label = (el.value || el.innerText || el.getAttribute('title') || '').trim();
+          if (!label) return null;
+          return {
+            tag:      el.tagName.toLowerCase(),
+            id:       el.id || undefined,
+            cls:      (el.className || '').slice(0, 60),
+            label,
+            selector: el.id ? `#${el.id}` : `${el.tagName.toLowerCase()}[class*="${(el.className||'').trim().split(/\s+/)[0]}"]`,
+          };
+        } catch(e) { return null; }
+      }).filter(Boolean).slice(0, 10);
+      if (results.length) log(`Activity complete — ${results.length} nav button(s) found`, 'ok');
+      else log('Activity complete — no next-activity buttons found in outer player', 'warn');
+      return results;
+    })() : [];
 
     const bodyText = getAllDocs()
       .map(doc => (doc.body?.innerText || '').replace(/\s+/g, ' ').trim())
@@ -635,7 +645,7 @@ Available actions:
       }
       case 'done': {
         log('✅ ' + action.reason, 'ok');
-        stopAgent(); break;
+        stopAgent(true); break;
       }
       default:
         log(`Unknown action: ${action.action}`, 'warn');
@@ -720,27 +730,38 @@ Available actions:
     if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
   }
 
-  function startAgent() {
+  function startAgent(auto = false) {
     if (!GM_getValue(STORAGE_KEY_API, '')) {
       log('Please paste your Groq API key and click Save first.', 'error'); return;
     }
+    GM_setValue(STORAGE_KEY_AUTORUN, true);
     running = true; history.length = 0;
     document.getElementById('ea-start-btn').disabled = true;
     document.getElementById('ea-stop-btn').disabled  = false;
-    log('Agent started.', 'ok'); setStatus('Running', true);
+    log(auto ? '🔄 Auto-resumed on new activity page.' : 'Agent started.', 'ok');
+    setStatus('Running', true);
     agentTick();
   }
 
-  function stopAgent() {
+  function stopAgent(finished = false) {
+    GM_setValue(STORAGE_KEY_AUTORUN, false);
     running = false; clearTimeout(loopHandle);
     document.getElementById('ea-start-btn').disabled = false;
     document.getElementById('ea-stop-btn').disabled  = true;
-    setStatus('Stopped', false); log('Agent stopped.', 'warn');
+    setStatus('Stopped', false);
+    log(finished ? '🎓 Course complete — agent stopped.' : 'Agent stopped.', 'warn');
   }
 
-  document.getElementById('ea-start-btn').addEventListener('click', startAgent);
-  document.getElementById('ea-stop-btn').addEventListener('click',  stopAgent);
+  document.getElementById('ea-start-btn').addEventListener('click', () => startAgent(false));
+  document.getElementById('ea-stop-btn').addEventListener('click',  () => stopAgent(false));
   document.getElementById('ea-debug-btn').addEventListener('click', runDebug);
+
+  // ─── Auto-resume after page navigation ────────────────────────────────────
+  // When the agent clicks "Next Activity", the page navigates to a new URL.
+  // The script re-injects and checks this flag to auto-restart seamlessly.
+  if (GM_getValue(STORAGE_KEY_AUTORUN, false) && GM_getValue(STORAGE_KEY_API, '')) {
+    setTimeout(() => startAgent(true), 2500);
+  }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
