@@ -769,39 +769,53 @@ Available actions:
       if (allDone) {
         setStatus('Activity done — moving to next…', true);
 
-        // Step 1: click FrameRight once to let Edgenuity close out the activity
+        // Step 1: click FrameRight to signal completion to Edgenuity's player
         if (frameRight) {
           log('All frames done — clicking FrameRight to exit activity', 'ok');
           simulateClick(frameRight);
-          await sleep(1800);
+          await sleep(3000); // longer wait: Edgenuity needs time to process completion
           if (!running) return;
         }
 
-        // Step 2: find the next-activity button in the outer player (doc[0]).
-        // Edgenuity uses input.uibtn elements; the primary action is usually
-        // input#saveButton or input.uibtn-blue. Try value text first, then fall
-        // back to the blue/primary button, then the last uibtn on the page.
-        const panelEl = document.getElementById('ea-panel');
-        const uibtns  = [...document.querySelectorAll('input[class*="uibtn"], input[type="button"], input[type="submit"]')]
-                          .filter(el => !panelEl?.contains(el));
+        // Step 2: find the real next-activity navigation in doc[0].
+        // Debug confirmed: a.nav is Edgenuity's next-arrow button (icon-only, no text).
+        // The three input.uibtn buttons are eNotes panel controls (Cancel/Delete/Save)
+        // and must NOT be clicked. Filter them out strictly.
+        const panelEl  = document.getElementById('ea-panel');
+        const SKIP_VAL = /^(save|cancel|delete|close|clear|exit|back|print|highlight)$/i;
+
+        // Primary: look for anchor nav elements (Edgenuity's activity arrows)
+        const navAnchors = [...document.querySelectorAll('a.nav, a[class*="next-activity"], a[class*="nextActivity"], a[href*="Activity"]')]
+          .filter(el => !panelEl?.contains(el));
+
+        // Secondary: input buttons whose value text clearly indicates navigation
+        const navInputs = [...document.querySelectorAll('input[class*="uibtn"], input[type="button"], input[type="submit"]')]
+          .filter(el => !panelEl?.contains(el))
+          .filter(el => {
+            const v = (el.value || '').trim();
+            return v && !SKIP_VAL.test(v);
+          });
 
         let nextBtn = null;
-        for (const el of uibtns) {
+        // Keyword match in input values
+        for (const el of navInputs) {
           const v = (el.value || '').toLowerCase();
-          if (v && (v.includes('next') || v.includes('go') || v.includes('continue') || v.includes('start') || v.includes('begin'))) {
+          if (v.includes('next') || v.includes('go') || v.includes('continue') || v.includes('start') || v.includes('begin')) {
             nextBtn = el; break;
           }
         }
-        if (!nextBtn) nextBtn = document.querySelector('input#saveButton, input.uibtn-blue');
-        if (!nextBtn && uibtns.length) nextBtn = uibtns[uibtns.length - 1]; // last button is usually "Next"
+        // a.nav — Edgenuity's forward navigation arrow
+        if (!nextBtn && navAnchors.length) nextBtn = navAnchors[navAnchors.length - 1];
+        // Any remaining non-skip input button
+        if (!nextBtn && navInputs.length) nextBtn = navInputs[navInputs.length - 1];
 
         if (nextBtn) {
-          const lbl = nextBtn.value || nextBtn.id || nextBtn.className;
-          log(`Next-activity button: "${lbl}" — clicking`, 'ok');
+          const lbl = nextBtn.value || nextBtn.href || nextBtn.className || nextBtn.tagName;
+          log(`Next-activity nav: "${lbl}" — clicking`, 'ok');
           simulateClick(nextBtn);
-          await sleep(2500); // wait for page navigation or new activity to load
+          await sleep(3000);
         } else {
-          log('No next-activity button found — waiting for page to update', 'warn');
+          log('No next-activity button found yet — will retry', 'warn');
         }
 
         if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
