@@ -765,60 +765,63 @@ Available actions:
       const frameRight   = findElement('li.FrameRight');
       const allDone      = totalNow > 0 && completedNow >= totalNow;
 
-      // ── All frames complete → deterministic activity transition ─────────────
+      // ── All frames complete → wait for Edgenuity to transition ──────────────
       if (allDone) {
-        setStatus('Activity done — moving to next…', true);
+        setStatus('Activity done — waiting for next…', true);
 
-        // Step 1: click FrameRight to signal completion to Edgenuity's player
+        // Snapshot the current iframe URL before clicking anything
+        const iframeBefore = document.querySelector('iframe')?.contentDocument?.location?.href || '';
+
+        // Click FrameRight: this sends Edgenuity's completion signal.
+        // After this click the player may auto-load the next activity in the iframe.
         if (frameRight) {
-          log('All frames done — clicking FrameRight to exit activity', 'ok');
+          log('All frames done — clicking FrameRight (completion signal)', 'ok');
           simulateClick(frameRight);
-          await sleep(3000); // longer wait: Edgenuity needs time to process completion
+          await sleep(3500);
           if (!running) return;
         }
 
-        // Step 2: find the real next-activity navigation in doc[0].
-        // Debug confirmed: a.nav is Edgenuity's next-arrow button (icon-only, no text).
-        // The three input.uibtn buttons are eNotes panel controls (Cancel/Delete/Save)
-        // and must NOT be clicked. Filter them out strictly.
-        const panelEl  = document.getElementById('ea-panel');
-        const SKIP_VAL = /^(save|cancel|delete|close|clear|exit|back|print|highlight)$/i;
+        // Check if the iframe content changed — if so, new activity already loaded.
+        const iframeAfter  = document.querySelector('iframe')?.contentDocument?.location?.href || '';
+        const newTotal     = queryAll('li[id^="frame"]').length;
+        const newCompleted = queryAll('li.FrameComplete').length;
+        const contentChanged = iframeAfter !== iframeBefore || newTotal !== totalNow || (newTotal > 0 && newCompleted < newTotal);
 
-        // Primary: look for anchor nav elements (Edgenuity's activity arrows)
-        const navAnchors = [...document.querySelectorAll('a.nav, a[class*="next-activity"], a[class*="nextActivity"], a[href*="Activity"]')]
+        if (contentChanged) {
+          log('New activity detected — resuming', 'ok');
+          if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+          return;
+        }
+
+        // Iframe unchanged — try clicking a.nav (Edgenuity header navigation).
+        // Note: a.nav may be a back/home link depending on position.
+        // We try both nav anchors; whichever one works will trigger auto-restart
+        // or a content change that we detect on the next tick.
+        const panelEl   = document.getElementById('ea-panel');
+        const navLinks  = [...document.querySelectorAll('a.nav')]
           .filter(el => !panelEl?.contains(el));
 
-        // Secondary: input buttons whose value text clearly indicates navigation
-        const navInputs = [...document.querySelectorAll('input[class*="uibtn"], input[type="button"], input[type="submit"]')]
-          .filter(el => !panelEl?.contains(el))
-          .filter(el => {
-            const v = (el.value || '').trim();
-            return v && !SKIP_VAL.test(v);
-          });
-
-        let nextBtn = null;
-        // Keyword match in input values
-        for (const el of navInputs) {
-          const v = (el.value || '').toLowerCase();
-          if (v.includes('next') || v.includes('go') || v.includes('continue') || v.includes('start') || v.includes('begin')) {
-            nextBtn = el; break;
-          }
-        }
-        // a.nav — Edgenuity's forward navigation arrow
-        if (!nextBtn && navAnchors.length) nextBtn = navAnchors[navAnchors.length - 1];
-        // Any remaining non-skip input button
-        if (!nextBtn && navInputs.length) nextBtn = navInputs[navInputs.length - 1];
-
-        if (nextBtn) {
-          const lbl = nextBtn.value || nextBtn.href || nextBtn.className || nextBtn.tagName;
-          log(`Next-activity nav: "${lbl}" — clicking`, 'ok');
-          simulateClick(nextBtn);
+        if (navLinks.length > 0) {
+          // Edgenuity typically has two a.nav: back (first) and forward (last).
+          // Try the last one first (forward/next).
+          const navTarget = navLinks[navLinks.length - 1];
+          log(`Clicking a.nav (${navLinks.length} found) — attempting forward navigation`, 'ok');
+          simulateClick(navTarget);
           await sleep(3000);
+          if (!running) return;
+
+          // If that didn't change content, try the first one
+          const afterNav = queryAll('li[id^="frame"]').length;
+          if (afterNav === totalNow && navLinks.length > 1) {
+            log('Trying first a.nav', 'info');
+            simulateClick(navLinks[0]);
+            await sleep(3000);
+          }
         } else {
-          log('No next-activity button found yet — will retry', 'warn');
+          log('No a.nav found — retrying on next tick', 'warn');
         }
 
-        if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+        if (running) loopHandle = setTimeout(agentTick, 2000);
         return;
       }
       // ── End activity transition ───────────────────────────────────────────────
