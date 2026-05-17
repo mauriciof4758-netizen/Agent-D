@@ -36,107 +36,103 @@
 
   const SYSTEM_PROMPT = `
 You are an autonomous agent completing Edgenuity coursework inside a real browser.
-The page is split across multiple documents. Here is exactly what each contains:
+YOUR MISSION: keep working until every lesson in the entire course is finished.
+NEVER stop on your own — only the human user can stop you by clicking the Stop button.
+NEVER output {"action":"done"} — there is always more content to complete.
 
-LESSON STRUCTURE — CRITICAL:
-Edgenuity lessons contain MULTIPLE activity sections in sequence:
+COURSE STRUCTURE:
+A full course has many lessons. Each lesson has multiple activity sections:
   Warm-Up → Instruction → Summary → Quiz → Unit Test
-You must complete ALL of them. activityNav in the page state lists the buttons to
-move between sections — it is only populated once all frames in the current section
-are complete. When activityNav is non-empty, click the most appropriate button
-(usually "Next" or "Go to…") to advance to the next section.
-Only use {"action":"done"} when bodyText says the lesson is 100% finished
-(e.g. "You have completed" / "Unit Test submitted"), or activityNav is empty
-and no frames remain.
+Complete every section of every lesson. After one lesson finishes, navigate to the next.
+After one course finishes, look for the next assignment in the course list.
 
-QUIZ / UNIT TEST (AssessmentViewer page — URL contains "AssessmentViewer"):
-The page state will include isAssessment:true, currentQuestion, and totalQuestions.
-- ol#navBtnList a    = question number buttons (shows which question you are on)
-- a#nextQuestion     = "Next" — advances to the next question; the agent auto-clicks
-                       this after you select an answer, so you only need to use clickChoice
-- a#saveAndExit      = "Save and Exit" — do NOT click this
-- Submit button      = only present/clickable once all questions are answered; the agent
-                       auto-submits when currentQuestion === totalQuestions
-CRITICAL: NEVER click Submit until you have answered every question (currentQuestion must equal totalQuestions).
-For each question: read bodyText for the question text, then use clickChoice to pick the answer.
-The code will automatically advance to the next question after you select an answer.
+QUIZ / UNIT TEST (AssessmentViewer — URL contains "AssessmentViewer"):
+Page state: isAssessment:true, currentQuestion, totalQuestions.
+- ol#navBtnList a = question buttons. a#nextQuestion = Next (auto-clicked after your answer).
+- a#saveAndExit — do NOT click this.
+- Submit button — only click after answering ALL questions (currentQuestion === totalQuestions).
+For each question: read bodyText, use clickChoice to select the answer.
 
-NAVIGATION CONTROLS (in the FrameChain document):
-- span#btnCheck        = "Done" / Check answer — click to submit the current answer
-- span#btnEntryAudio   = plays intro audio
-- span#btnExitAudio    = plays final/exit audio
-- li.FrameRight        = advances to the next frame/slide
-- li.FrameRight.FrameHighlight = next frame is ready — click this to advance
-- li.FrameLeft         = goes back one frame
-- li.FrameCurrent      = the currently active frame
-- li.FrameComplete     = a frame that is already done
-- li.FrameCurrent.FrameComplete = current frame is complete — click li.FrameRight to move on
+NAVIGATION CONTROLS (FrameChain document):
+- span#btnCheck              = Done / Check answer
+- li.FrameRight              = next frame/slide
+- li.FrameRight.FrameHighlight = next frame ready — click to advance
+- li.FrameCurrent.FrameComplete = current frame done — click li.FrameRight
+- li.FrameComplete           = frame already finished
 
-CONTENT (in the media.edgenuity.com document):
-- input, textarea                  = text answer fields — type the answer here
-- select                           = dropdown answer
-- span.TextAnswerIncorrect         = your last answer was WRONG — try again with a different answer
-- span.TextAnswerCorrect           = correct!
-- div.sbgTile, .ui-draggable       = draggable tiles for sort/categorize activities
-- div.sbgTile.dropped.checked      = tile has been placed correctly (do NOT move again)
-- div.sbgTile.incorrect            = tile has NOT been correctly placed yet — must still drag it
-- div.dropContainer, .ui-droppable = drop zone categories (e.g. #sbgCata, #sbgCatb)
-- div.done-start                   = sort activity is ready — tiles can now be dragged
-- div.done-complete                = ALL tiles verified correct — click li.FrameRight to advance
-- div.done-retry                   = your written answer was WRONG — clear it, write a DIFFERENT real answer, and click span#btnCheck again
-- [draggable="true"]               = drag this element to its matching drop zone
+CONTENT (media.edgenuity.com document):
+- input, textarea            = text answer — type here
+- span.TextAnswerIncorrect   = WRONG — retry with different answer
+- span.TextAnswerCorrect     = correct!
+- div.sbgTile.dropped.checked = correctly placed tile — do NOT move
+- div.sbgTile.incorrect      = misplaced tile — drag to correct zone
+- div.done-complete          = sort activity fully correct — click li.FrameRight
+- div.done-retry             = written answer WRONG — retype that field only
+- [draggable="true"]         = drag to its matching drop zone
 
-MULTIPLE-CHOICE QUESTIONS:
-The page state includes answerChoices[] — an array of all visible answer options.
-Each entry has: { index, text, type ("checkbox" or "radio"), checked (true/false) }
-- type "radio"    = pick EXACTLY ONE correct answer, then click span#btnCheck
-- type "checkbox" = pick ALL correct answers (there may be 2, 3, or more), then click span#btnCheck
-- Use action "clickChoice" with the exact label text to select each answer
-- Check answerChoices[].checked to avoid re-clicking already-selected options
-- Do NOT advance to the next frame until span#btnCheck has been clicked and no TextAnswerIncorrect is shown
+VISUAL QUESTIONS — GRAPHS, CHARTS, DIAGRAMS, MAPS:
+Images from the page are sent alongside this message. Examine them carefully:
+- Read ALL axis labels, titles, legends, units, data points, and annotations
+- Line/bar graphs: identify trend direction, max/min values, rate of change
+- Scatter plots: identify correlation type (positive/negative/none)
+- Science diagrams: identify labeled parts, structures, and their functions
+- Maps: identify labeled regions, borders, geographic features
+- Math functions: identify equation type (linear/quadratic/exponential), slope, intercepts
+- Tables: read exact values from rows/columns that the question references
+Describe what you observe in the image to reason to the correct answer.
+Use image data to answer — do not say "I cannot see the image".
 
-SORT / CATEGORIZE ACTIVITIES:
-- Read bodyText for category names; drag each unplaced tile to its correct div.dropContainer.
-- Tiles with .dropped.checked are done — skip them.
-- When div.done-complete is visible, click li.FrameRight to advance (NOT span#btnCheck).
+SUBJECT KNOWLEDGE — ALWAYS ANSWER CORRECTLY:
+You have expert knowledge of all middle school and high school subjects.
+Give the educationally correct answer based on your training:
+- Math: algebra, geometry, statistics, trigonometry, calculus concepts
+- Biology: cells, genetics, evolution, ecosystems, body systems
+- Chemistry: atomic structure, periodic table, reactions, stoichiometry
+- Physics: kinematics, forces, energy, waves, electricity
+- Earth Science: plate tectonics, weather, rock cycle, space
+- US History: colonial era through modern times, key events, causes/effects
+- World History: civilizations, revolutions, wars, treaties, key figures
+- English: grammar rules, literary devices, thesis writing, text analysis
+- Economics: supply/demand, GDP, market types, fiscal/monetary policy
+- Government/Civics: branches, amendments, electoral process, federalism
+- Spanish/French: vocabulary, conjugation, grammar rules
+For fill-in-the-blank: type ONLY the exact word or phrase the blank expects.
+For short answer: 2–3 sentences with specific factual detail.
+For essay: a structured paragraph — claim, evidence, explanation.
+NEVER give vague placeholder answers. Use your knowledge to answer correctly.
 
-WRITTEN / ESSAY ANSWERS — CRITICAL RULES:
-When you see an input or textarea that requires a typed answer:
-- Read bodyText carefully to understand exactly what the question is asking.
-- Use your own knowledge of the subject to write a REAL, CORRECT, COMPLETE answer.
-- NEVER type placeholder text such as "Answer to the question", "Sample answer", "[answer here]",
-  "I don't know", or anything vague. That will be marked wrong.
-- Write a substantive answer as if you are a knowledgeable student who wants full credit.
-- For short-answer prompts: 1–3 complete sentences with specific details.
-- For fill-in-the-blank (single word/phrase): type only the word or phrase that fits.
+MULTIPLE-CHOICE:
+answerChoices[] lists all options with type ("radio" or "checkbox") and checked state.
+- radio: pick EXACTLY ONE correct answer → clickChoice, then span#btnCheck
+- checkbox: pick ALL correct answers → clickChoice each, then span#btnCheck
+Avoid re-clicking already-checked options.
 
-DECIDING BETWEEN type AND clickChoice — READ THIS FIRST:
-- If the page state includes a non-empty textInputs[] array → the question requires a TYPED answer.
-  You MUST use {"action":"type","selector":"<selector from textInputs>","text":"<real answer>"}.
-  NEVER use clickChoice when textInputs is non-empty. clickChoice is ONLY for div.answer-choice items.
-- If answerChoices[] is non-empty AND textInputs[] is empty → use clickChoice.
-- If both are present → type first, then click span#btnCheck (some questions mix both).
+SORT / CATEGORIZE:
+Read category names from bodyText. Drag unplaced tiles to correct dropContainer.
+Tiles with .dropped.checked are done — skip them.
+When div.done-complete appears → click li.FrameRight (NOT span#btnCheck).
+
+DECIDING BETWEEN type AND clickChoice:
+- textInputs[] non-empty → question requires a TYPED answer.
+  Use {"action":"type","selector":"<textInputs[0].selector>","text":"<real answer>"} then click span#btnCheck.
+  NEVER use clickChoice when textInputs[] is non-empty.
+- answerChoices[] non-empty, textInputs[] empty → use clickChoice.
+- Both present → type first, then check.
 
 WORKFLOW:
-1. If mediaPlaying is true → wait 5 seconds.
-2. textInputs[] non-empty (fill-in-the-blank / short answer / essay):
-   Read the question from bodyText. Type your REAL answer using
-   {"action":"type","selector":"<textInputs[0].selector>","text":"<real answer>"}.
-   Then click span#btnCheck. Do NOT use clickChoice.
-3. answerChoices[] non-empty, type=radio → clickChoice for ONE answer, then click span#btnCheck.
-4. answerChoices[] non-empty, type=checkbox → clickChoice for EACH correct answer, then click span#btnCheck.
-5. Sort/categorize: drag unplaced tiles to correct drop zones; click li.FrameRight when done-complete appears.
-6. Other drag-and-drop: drag each item to its correct target, then click span#btnCheck.
-7. If span.TextAnswerIncorrect is present → wrong answer — only retype into the wrong field with a different answer.
-8. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
-9. Informational slides (no inputs, no draggables) → click li.FrameRight or span#btnCheck.
-10. When ALL frames are FrameComplete → this ONE activity section is done.
-    Check activityNav for a "Next", "Continue", or "Go to" button and click it to start
-    the next activity section. Do NOT use {"action":"done"} yet.
-11. Only use {"action":"done"} when the entire lesson is genuinely complete —
-    bodyText says something like "You have completed" or activityNav has no more buttons.
+1. mediaPlaying:true → wait 5 seconds.
+2. textInputs[] non-empty → type real answer, click span#btnCheck.
+3. radio answer choices → clickChoice ONE, click span#btnCheck.
+4. checkbox answer choices → clickChoice EACH correct one, click span#btnCheck.
+5. Sort/categorize → drag tiles to correct zones, click li.FrameRight when done-complete.
+6. Drag-and-drop → drag each item to target, click span#btnCheck.
+7. span.TextAnswerIncorrect present → retype ONLY that specific wrong field with a different real answer.
+8. Frame complete but more frames remain → click li.FrameRight.
+9. No inputs/draggables (informational slide) → click li.FrameRight or span#btnCheck.
+10. ALL frames FrameComplete → click activityNav button (Next/Continue/Go to) for the next section.
+11. activityNav empty, no frames → look for a Next Lesson, Start, or Continue button anywhere on page.
 12. Never touch elements inside #ea-panel.
-13. Return ONLY a single JSON object — no markdown fences, no explanation.
+13. Return ONLY a single JSON object — no markdown, no explanation.
 
 Available actions:
   {"action":"click","selector":"<CSS>","reason":"<why>"}
@@ -145,7 +141,6 @@ Available actions:
   {"action":"select","selector":"<CSS of select>","value":"<option text or value>","reason":"<why>"}
   {"action":"drag","fromSelector":"<CSS>","toSelector":"<CSS>","reason":"<why>"}
   {"action":"wait","seconds":<number>,"reason":"<why>"}
-  {"action":"done","reason":"All activities and tests are complete"}
 `.trim();
 
   // ─── Styles ───────────────────────────────────────────────────────────────
@@ -704,24 +699,39 @@ Available actions:
   }
 
   async function collectPageImages() {
-    const urls = new Set();
+    const results = [];
+    const seenUrls = new Set();
+
     for (const doc of getAllDocs()) {
+      if (results.length >= 5) break;
+
+      // ── img elements ──────────────────────────────────────────────────────
       for (const img of doc.querySelectorAll('img')) {
+        if (results.length >= 5) break;
         try {
           const src = img.src;
-          if (!src || src.startsWith('data:') || !src.startsWith('http')) continue;
-          // Skip tiny icons
-          if (img.naturalWidth  > 0 && img.naturalWidth  < 60) continue;
-          if (img.naturalHeight > 0 && img.naturalHeight < 60) continue;
-          urls.add(src);
+          if (!src || seenUrls.has(src) || !src.startsWith('http')) continue;
+          // Skip tiny icons (< 30px); 0 means not yet loaded — include those
+          if (img.naturalWidth  > 0 && img.naturalWidth  < 30) continue;
+          if (img.naturalHeight > 0 && img.naturalHeight < 30) continue;
+          seenUrls.add(src);
+          const data = await fetchImageAsBase64(src).catch(() => null);
+          if (data) results.push(data);
+        } catch(e) {}
+      }
+
+      // ── canvas elements (rendered graphs, charts) ─────────────────────────
+      for (const canvas of doc.querySelectorAll('canvas')) {
+        if (results.length >= 5) break;
+        try {
+          if (canvas.width < 30 || canvas.height < 30) continue;
+          const dataUrl = canvas.toDataURL('image/png');
+          const b64 = dataUrl.split(',')[1];
+          if (b64) results.push({ b64, mime: 'image/png' });
         } catch(e) {}
       }
     }
-    // Limit to 3 images to keep the API payload manageable
-    const results = [];
-    for (const url of [...urls].slice(0, 3)) {
-      try { results.push(await fetchImageAsBase64(url)); } catch(e) {}
-    }
+
     return results;
   }
 
@@ -749,6 +759,44 @@ Available actions:
     } else {
       log('Answer submitted — no feedback element found yet', 'info');
     }
+  }
+
+  // ─── Next-course-item finder ─────────────────────────────────────────────
+  // Scans the outer (top-level) Edgenuity player document for any button/link
+  // that moves the student forward to the next activity, section, or lesson.
+
+  const SKIP_PATTERN = /cancel|delete|save.*exit|exit|sign.?out|log.?out|eNotes|print/i;
+  const NEXT_PATTERN = /^(next|continue|start|go to|begin|proceed|resume|launch|open)\b/i;
+
+  function findNextCourseLink() {
+    const panelEl = document.getElementById('ea-panel');
+    const outside = el => !panelEl?.contains(el);
+
+    // 1. Buttons / inputs in top document with forward-navigation text
+    for (const el of document.querySelectorAll(
+      'input[type="button"], input[type="submit"], input[type="image"], button, a[href]'
+    )) {
+      if (!outside(el)) continue;
+      const txt = (el.value || el.innerText || el.getAttribute('title') || '').trim();
+      if (SKIP_PATTERN.test(txt)) continue;
+      if (NEXT_PATTERN.test(txt)) return el;
+    }
+
+    // 2. Class-name hints
+    for (const el of document.querySelectorAll(
+      '[class*="next"], [class*="continue"], [class*="forward"], [class*="proceed"]'
+    )) {
+      if (!outside(el)) continue;
+      const txt = (el.value || el.innerText || '').trim();
+      if (SKIP_PATTERN.test(txt)) continue;
+      if (txt) return el;
+    }
+
+    // 3. a.nav forward link (last = forward in Edgenuity)
+    const navLinks = [...document.querySelectorAll('a.nav')].filter(outside);
+    if (navLinks.length > 0) return navLinks[navLinks.length - 1];
+
+    return null;
   }
 
   async function executeAction(action) {
@@ -825,16 +873,32 @@ Available actions:
         await sleep(secs * 1000); break;
       }
       case 'done': {
-        // Guard: don't stop if frames exist but none are confirmed complete
-        // (LLM might call done too early when it can't find nav buttons)
         const fr = queryAll('li[id^="frame"]').length;
         const fc = queryAll('li.FrameComplete').length;
         if (fr > 0 && fc < fr) {
           log('⚠️ LLM called done but frames remain — ignoring', 'warn');
           break;
         }
-        log('🎓 ' + action.reason, 'ok');
-        stopAgent(true); break;
+        // Never stop automatically — always look for the next thing to do.
+        log('📚 LLM called done — searching for next activity/lesson…', 'ok');
+        const nextLink = findNextCourseLink();
+        if (nextLink) {
+          const label = (nextLink.value || nextLink.innerText || 'link').trim().slice(0, 40);
+          log(`Found next: "${label}" — navigating`, 'ok');
+          simulateClick(nextLink);
+          await sleep(3000);
+        } else {
+          // No obvious link — push a correction into history so the LLM looks harder
+          history.push({
+            role: 'user',
+            content: 'IMPORTANT: Do NOT output {"action":"done"} again. ' +
+                     'The current section appears complete but the course is NOT finished. ' +
+                     'Scan activityNav[], bodyText, and any visible buttons for something ' +
+                     'labeled Next, Continue, Start, Go to, or Begin and click it. ' +
+                     'If you see a course/lesson list, click the next incomplete item.',
+          });
+        }
+        break;
       }
       default:
         log(`Unknown action: ${action.action}`, 'warn');
@@ -968,32 +1032,34 @@ Available actions:
           return;
         }
 
-        // Iframe unchanged — try clicking a.nav (Edgenuity header navigation).
-        // Note: a.nav may be a back/home link depending on position.
-        // We try both nav anchors; whichever one works will trigger auto-restart
-        // or a content change that we detect on the next tick.
-        const panelEl   = document.getElementById('ea-panel');
-        const navLinks  = [...document.querySelectorAll('a.nav')]
-          .filter(el => !panelEl?.contains(el));
-
-        if (navLinks.length > 0) {
-          // Edgenuity typically has two a.nav: back (first) and forward (last).
-          // Try the last one first (forward/next).
-          const navTarget = navLinks[navLinks.length - 1];
-          log(`Clicking a.nav (${navLinks.length} found) — attempting forward navigation`, 'ok');
-          simulateClick(navTarget);
-          await sleep(3000);
+        // Iframe unchanged — find the next forward navigation in the page.
+        // findNextCourseLink() searches for Next/Continue buttons then falls
+        // back to a.nav (forward link) so we cover all Edgenuity layouts.
+        const nextLink = findNextCourseLink();
+        if (nextLink) {
+          const label = (nextLink.value || nextLink.innerText || 'link').trim().slice(0, 40);
+          log(`Clicking next: "${label}"`, 'ok');
+          simulateClick(nextLink);
+          await sleep(3500);
           if (!running) return;
 
-          // If that didn't change content, try the first one
+          // If frame count changed, new activity loaded — resume normally
           const afterNav = queryAll('li[id^="frame"]').length;
-          if (afterNav === totalNow && navLinks.length > 1) {
-            log('Trying first a.nav', 'info');
+          if (afterNav !== totalNow) {
+            if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+            return;
+          }
+
+          // Still no change — try a.nav[0] as a last resort (might be a two-step flow)
+          const navLinks = [...document.querySelectorAll('a.nav')]
+            .filter(el => !document.getElementById('ea-panel')?.contains(el));
+          if (navLinks.length > 1) {
+            log('Trying fallback a.nav[0]', 'info');
             simulateClick(navLinks[0]);
             await sleep(3000);
           }
         } else {
-          log('No a.nav found — retrying on next tick', 'warn');
+          log('No forward navigation found — will retry', 'warn');
         }
 
         if (running) loopHandle = setTimeout(agentTick, 2000);
