@@ -13,6 +13,8 @@
 // @grant        GM_getValue
 // @grant        GM_addStyle
 // @connect      api.groq.com
+// @connect      media.edgenuity.com
+// @connect      cdn.edgenuity.com
 // @noframes
 // ==/UserScript==
 
@@ -25,6 +27,9 @@
   const STORAGE_KEY_AUTORUN = 'edgenuity_agent_autorun';
   const POLL_INTERVAL_MS    = 1500;
   const ACTION_DELAY_MS     = 800;
+  const TEXT_MODEL          = 'llama-3.3-70b-versatile';
+  const VISION_MODEL        = 'meta-llama/llama-4-maverick-17b-128e-instruct';
+  const STUCK_TICKS_LIMIT   = 20; // ~30 s at 1.5 s/tick before recovery fires
 
   // ─── System prompt ────────────────────────────────────────────────────────
   // Based on real debug scan of Edgenuity's DOM structure
@@ -412,7 +417,7 @@ Available actions:
     ].join(',')).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
 
     const inputs = queryAll(
-      'input[type="text"], input[type="radio"], input[type="checkbox"], textarea, select'
+      'input[type="text"], input[type="radio"], input[type="checkbox"], textarea, select, [contenteditable="true"]'
     ).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
 
     const draggables = queryAll(
@@ -498,10 +503,27 @@ Available actions:
 
   // ─── Groq API call ────────────────────────────────────────────────────────
 
-  function callLLM(messages) {
+  // images: array of {b64, mime} from collectPageImages(); omit or pass [] for text-only
+  function callLLM(messages, images = []) {
     return new Promise((resolve, reject) => {
       const apiKey = GM_getValue(STORAGE_KEY_API, '');
       if (!apiKey) { reject(new Error('No API key set')); return; }
+
+      const useVision = images.length > 0;
+      const model     = useVision ? VISION_MODEL : TEXT_MODEL;
+
+      // When images are present, convert the last user message to a multipart content array
+      let outMessages = messages;
+      if (useVision && messages.length > 0) {
+        const last = messages[messages.length - 1];
+        if (last.role === 'user' && typeof last.content === 'string') {
+          const content = [{ type: 'text', text: last.content }];
+          for (const img of images) {
+            content.push({ type: 'image_url', image_url: { url: `data:${img.mime};base64,${img.b64}` } });
+          }
+          outMessages = [...messages.slice(0, -1), { role: 'user', content }];
+        }
+      }
 
       GM_xmlhttpRequest({
         method: 'POST',
@@ -511,9 +533,9 @@ Available actions:
           'Authorization': 'Bearer ' + apiKey,
         },
         data: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model,
           max_tokens: 512,
-          messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
+          messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...outMessages],
         }),
         onload(res) {
           try {
@@ -542,14 +564,41 @@ Available actions:
 
   function simulateType(el, text) {
     el.focus();
-    el.value = '';
-    for (const char of text) {
-      el.value += char;
-      el.dispatchEvent(new Event('input',  {bubbles:true}));
-      el.dispatchEvent(new KeyboardEvent('keydown', {key:char, bubbles:true}));
-      el.dispatchEvent(new KeyboardEvent('keyup',   {key:char, bubbles:true}));
+
+    // contenteditable divs (rich-text answer boxes)
+    if (el.isContentEditable) {
+      el.textContent = '';
+      el.dispatchEvent(new Event('input', {bubbles:true}));
+      for (const char of text) {
+        el.dispatchEvent(new KeyboardEvent('keydown',  {key:char, bubbles:true}));
+        el.dispatchEvent(new KeyboardEvent('keypress', {key:char, bubbles:true}));
+        el.textContent += char;
+        el.dispatchEvent(new Event('input', {bubbles:true}));
+        el.dispatchEvent(new KeyboardEvent('keyup', {key:char, bubbles:true}));
+      }
+      el.dispatchEvent(new Event('change', {bubbles:true}));
+      el.blur();
+      return;
     }
+
+    // Use native setter so React/Angular/Vue detect the change
+    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+
+    if (nativeSetter) { nativeSetter.call(el, ''); } else { el.value = ''; }
+    el.dispatchEvent(new Event('input', {bubbles:true}));
+
+    for (const char of text) {
+      el.dispatchEvent(new KeyboardEvent('keydown',  {key:char, bubbles:true}));
+      el.dispatchEvent(new KeyboardEvent('keypress', {key:char, bubbles:true}));
+      const next = el.value + char;
+      if (nativeSetter) { nativeSetter.call(el, next); } else { el.value = next; }
+      el.dispatchEvent(new Event('input', {bubbles:true}));
+      el.dispatchEvent(new KeyboardEvent('keyup', {key:char, bubbles:true}));
+    }
+
     el.dispatchEvent(new Event('change', {bubbles:true}));
+    el.blur();
   }
 
   function simulateSelect(el, value) {
@@ -587,6 +636,52 @@ Available actions:
     } catch(e) {}
   }
 
+  // ─── Vision helpers ───────────────────────────────────────────────────────
+
+  function fetchImageAsBase64(url) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        responseType: 'blob',
+        onload(res) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = reader.result; // data:<mime>;base64,<b64>
+            const mime = dataUrl.split(';')[0].split(':')[1] || 'image/png';
+            const b64  = dataUrl.split(',')[1] || '';
+            resolve({ b64, mime });
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(res.response);
+        },
+        onerror: reject,
+      });
+    });
+  }
+
+  async function collectPageImages() {
+    const urls = new Set();
+    for (const doc of getAllDocs()) {
+      for (const img of doc.querySelectorAll('img')) {
+        try {
+          const src = img.src;
+          if (!src || src.startsWith('data:') || !src.startsWith('http')) continue;
+          // Skip tiny icons
+          if (img.naturalWidth  > 0 && img.naturalWidth  < 60) continue;
+          if (img.naturalHeight > 0 && img.naturalHeight < 60) continue;
+          urls.add(src);
+        } catch(e) {}
+      }
+    }
+    // Limit to 3 images to keep the API payload manageable
+    const results = [];
+    for (const url of [...urls].slice(0, 3)) {
+      try { results.push(await fetchImageAsBase64(url)); } catch(e) {}
+    }
+    return results;
+  }
+
   // Selectors that count as "submitting an answer" — trigger post-submit verification
   const SUBMIT_SELECTORS = ['#btnCheck', 'span#btnCheck'];
 
@@ -600,9 +695,11 @@ Available actions:
         role: 'user',
         content: '⚠️ VERIFICATION FAILED: your last answer was WRONG ' +
                  '(span.TextAnswerIncorrect or div.done-retry is on screen). ' +
-                 'Clear the field, write a COMPLETELY DIFFERENT and more specific answer, ' +
-                 'and click span#btnCheck again. Do NOT advance to the next frame yet. ' +
-                 'Do NOT type placeholder text — give a real, substantive answer based on the question.',
+                 'IMPORTANT: only fix the SPECIFIC field that was wrong — do NOT clear or change ' +
+                 'any other inputs or answer choices that were already correct. ' +
+                 'Type a COMPLETELY DIFFERENT, more specific answer into that one field, ' +
+                 'then click span#btnCheck again. Do NOT advance to the next frame. ' +
+                 'Do NOT use placeholder text — give a real, substantive answer.',
       });
     } else if (correct) {
       log('✅ Answer verified correct', 'ok');
@@ -697,6 +794,7 @@ Available actions:
   let running = false, loopHandle = null;
   const history = [];
   let assessmentAnsweredQ = 0; // tracks which question number the agent last answered
+  let stuckTicks = 0, lastProgressKey = '';
 
   async function agentTick() {
     if (!running) return;
@@ -704,9 +802,34 @@ Available actions:
     if (isMediaPlaying()) {
       log('Media playing — waiting…', 'info');
       setStatus('Waiting for media…', true);
+      stuckTicks = 0; // media playing is intentional — don't count as stuck
       loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
       return;
     }
+
+    // ── Stuck watchdog ────────────────────────────────────────────────────────
+    {
+      const qBtnsNow = queryAll('ol#navBtnList a.plainbtn:not([class*="gray"])');
+      const selBtnNow = [...qBtnsNow].find(el => /\bselected\b/.test(el.className));
+      const curQNow = selBtnNow ? (parseInt(selBtnNow.innerText) || 1) : 0;
+      const progressKey = `${window.location.href}|${queryAll('li.FrameComplete').length}|${curQNow}`;
+      if (progressKey === lastProgressKey) {
+        stuckTicks++;
+      } else {
+        stuckTicks = 0;
+        lastProgressKey = progressKey;
+      }
+      if (stuckTicks >= STUCK_TICKS_LIMIT) {
+        log('⚠️ Stuck detected — attempting recovery click', 'warn');
+        stuckTicks = 0;
+        const rec = findElement('li.FrameRight') || findElement('span#btnCheck') || findElement('a#nextQuestion');
+        if (rec) { simulateClick(rec); await sleep(1500); }
+        else { log('No recovery target found — continuing', 'warn'); }
+        if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+        return;
+      }
+    }
+    // ── End stuck watchdog ────────────────────────────────────────────────────
 
     // ── Assessment fast path: auto-navigate between quiz/test questions ─────────
     // The LLM only needs to select answers (clickChoice). This code advances
@@ -857,9 +980,14 @@ Available actions:
     history.push({ role: 'user', content: userMsg });
     if (history.length > 20) history.splice(0, 2);
 
+    // Collect page images for vision when the page has visible graphs/diagrams
+    let pageImages = [];
+    try { pageImages = await collectPageImages(); } catch(e) {}
+    if (pageImages.length) log(`Vision: sending ${pageImages.length} image(s) to AI`, 'info');
+
     let action;
     try {
-      action = await callLLM(history);
+      action = await callLLM(history, pageImages);
       history.push({ role: 'assistant', content: JSON.stringify(action) });
     } catch(err) {
       log('Groq error: ' + err.message, 'error');
@@ -878,7 +1006,7 @@ Available actions:
       log('Please paste your Groq API key and click Save first.', 'error'); return;
     }
     GM_setValue(STORAGE_KEY_AUTORUN, true);
-    running = true; history.length = 0; assessmentAnsweredQ = 0;
+    running = true; history.length = 0; assessmentAnsweredQ = 0; stuckTicks = 0; lastProgressKey = '';
     document.getElementById('ea-start-btn').disabled = true;
     document.getElementById('ea-stop-btn').disabled  = false;
     log(auto ? '🔄 Auto-resumed on new activity page.' : 'Agent started.', 'ok');
