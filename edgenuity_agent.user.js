@@ -562,13 +562,19 @@ Available actions:
 
   // ─── Groq API call ────────────────────────────────────────────────────────
 
-  // images: array of {b64, mime} from collectPageImages(); omit or pass [] for text-only
+  // Tracks whether the vision model is available on this account.
+  // Set to false on first access-denied error so we stop trying and avoid spamming errors.
+  let visionAvailable = true;
+
+  // images: array of {b64, mime} from collectPageImages(); omit or pass [] for text-only.
+  // If the vision model is unavailable or the call fails with an access error,
+  // automatically retries with the text-only model so the agent keeps running.
   function callLLM(messages, images = []) {
     return new Promise((resolve, reject) => {
       const apiKey = GM_getValue(STORAGE_KEY_API, '');
       if (!apiKey) { reject(new Error('No API key set')); return; }
 
-      const useVision = images.length > 0;
+      const useVision = images.length > 0 && visionAvailable;
       const model     = useVision ? VISION_MODEL : TEXT_MODEL;
 
       // When images are present, convert the last user message to a multipart content array
@@ -599,7 +605,19 @@ Available actions:
         onload(res) {
           try {
             const body = JSON.parse(res.responseText);
-            if (body.error) { reject(new Error(body.error.message)); return; }
+            if (body.error) {
+              const msg = body.error.message || '';
+              // If the vision model is inaccessible on this plan, disable vision and
+              // immediately retry with the plain text model so the agent keeps running.
+              if (useVision && /model|not found|access|permission|tier|vision/i.test(msg)) {
+                visionAvailable = false;
+                log('⚠️ Vision model unavailable on this plan — switching to text-only', 'warn');
+                callLLM(messages, []).then(resolve).catch(reject);
+                return;
+              }
+              reject(new Error(msg));
+              return;
+            }
             const text  = body.choices?.[0]?.message?.content || '{}';
             const clean = text.replace(/^```[a-z]*\n?/, '').replace(/\n?```$/, '').trim();
             resolve(JSON.parse(clean));
@@ -1138,10 +1156,12 @@ Available actions:
     history.push({ role: 'user', content: userMsg });
     if (history.length > 20) history.splice(0, 2);
 
-    // Collect page images for vision when the page has visible graphs/diagrams
+    // Collect page images for vision when available
     let pageImages = [];
-    try { pageImages = await collectPageImages(); } catch(e) {}
-    if (pageImages.length) log(`Vision: sending ${pageImages.length} image(s) to AI`, 'info');
+    if (visionAvailable) {
+      try { pageImages = await collectPageImages(); } catch(e) {}
+      if (pageImages.length) log(`Vision: ${pageImages.length} image(s) → AI`, 'info');
+    }
 
     let action;
     try {
