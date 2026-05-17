@@ -110,15 +110,24 @@ When you see an input or textarea that requires a typed answer:
 - For short-answer prompts: 1–3 complete sentences with specific details.
 - For fill-in-the-blank (single word/phrase): type only the word or phrase that fits.
 
+DECIDING BETWEEN type AND clickChoice — READ THIS FIRST:
+- If the page state includes a non-empty textInputs[] array → the question requires a TYPED answer.
+  You MUST use {"action":"type","selector":"<selector from textInputs>","text":"<real answer>"}.
+  NEVER use clickChoice when textInputs is non-empty. clickChoice is ONLY for div.answer-choice items.
+- If answerChoices[] is non-empty AND textInputs[] is empty → use clickChoice.
+- If both are present → type first, then click span#btnCheck (some questions mix both).
+
 WORKFLOW:
 1. If mediaPlaying is true → wait 5 seconds.
-2. Fill-in-the-blank / short answer: read the question from bodyText, then type the REAL answer
-   into the input/textarea using the "type" action, then click span#btnCheck.
-3. Single-answer multiple choice (radio): use clickChoice for ONE answer, then click span#btnCheck.
-4. Select-all-that-apply (checkbox): use clickChoice for EACH correct answer, then click span#btnCheck.
+2. textInputs[] non-empty (fill-in-the-blank / short answer / essay):
+   Read the question from bodyText. Type your REAL answer using
+   {"action":"type","selector":"<textInputs[0].selector>","text":"<real answer>"}.
+   Then click span#btnCheck. Do NOT use clickChoice.
+3. answerChoices[] non-empty, type=radio → clickChoice for ONE answer, then click span#btnCheck.
+4. answerChoices[] non-empty, type=checkbox → clickChoice for EACH correct answer, then click span#btnCheck.
 5. Sort/categorize: drag unplaced tiles to correct drop zones; click li.FrameRight when done-complete appears.
 6. Other drag-and-drop: drag each item to its correct target, then click span#btnCheck.
-7. If span.TextAnswerIncorrect is present → wrong answer — retry with a different, REAL answer.
+7. If span.TextAnswerIncorrect is present → wrong answer — only retype into the wrong field with a different answer.
 8. After checking, if frames without FrameComplete remain → click li.FrameRight to advance.
 9. Informational slides (no inputs, no draggables) → click li.FrameRight or span#btnCheck.
 10. When ALL frames are FrameComplete → this ONE activity section is done.
@@ -475,6 +484,32 @@ Available actions:
       return results;
     })() : [];
 
+    // textInputs: explicitly lists every writable text field with a ready-to-use CSS selector.
+    // The LLM must use {"action":"type","selector":"<selector>","text":"<answer>"} for these.
+    const textInputs = [];
+    for (const doc of getAllDocs()) {
+      for (const el of doc.querySelectorAll(
+        'textarea, input[type="text"], input:not([type]), [contenteditable="true"]'
+      )) {
+        if (panelEl && panelEl.contains(el)) continue;
+        try {
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) continue;
+          // Build the most specific selector possible
+          let sel = el.id ? `#${el.id}`
+            : el.name ? `${el.tagName.toLowerCase()}[name="${el.name}"]`
+            : el.className ? `${el.tagName.toLowerCase()}.${(el.className||'').trim().split(/\s+/)[0]}`
+            : el.tagName.toLowerCase();
+          textInputs.push({
+            selector:     sel,
+            tag:          el.tagName.toLowerCase(),
+            placeholder:  el.placeholder || undefined,
+            currentValue: (el.value || el.textContent || '').trim().slice(0, 60) || '(empty)',
+          });
+        } catch(e) {}
+      }
+    }
+
     const bodyText = getAllDocs()
       .map(doc => (doc.body?.innerText || '').replace(/\s+/g, ' ').trim())
       .filter(Boolean).join('\n---\n').slice(0, 4000);
@@ -495,6 +530,7 @@ Available actions:
       navButtons,
       otherButtons,
       inputs,
+      textInputs,
       draggables,
       dropzones,
       bodyText,
@@ -563,41 +599,48 @@ Available actions:
   }
 
   function simulateType(el, text) {
+    // Always use the element's OWN frame's window — using the top window's
+    // Event/KeyboardEvent constructors on an iframe element fails instanceof
+    // checks inside the iframe's jQuery/Angular listeners.
+    const win = el.ownerDocument.defaultView || window;
+
     el.focus();
 
     // contenteditable divs (rich-text answer boxes)
     if (el.isContentEditable) {
       el.textContent = '';
-      el.dispatchEvent(new Event('input', {bubbles:true}));
+      el.dispatchEvent(new win.Event('input', {bubbles:true}));
       for (const char of text) {
-        el.dispatchEvent(new KeyboardEvent('keydown',  {key:char, bubbles:true}));
-        el.dispatchEvent(new KeyboardEvent('keypress', {key:char, bubbles:true}));
+        el.dispatchEvent(new win.KeyboardEvent('keydown',  {key:char, bubbles:true}));
+        el.dispatchEvent(new win.KeyboardEvent('keypress', {key:char, bubbles:true}));
         el.textContent += char;
-        el.dispatchEvent(new Event('input', {bubbles:true}));
-        el.dispatchEvent(new KeyboardEvent('keyup', {key:char, bubbles:true}));
+        el.dispatchEvent(new win.Event('input', {bubbles:true}));
+        el.dispatchEvent(new win.KeyboardEvent('keyup', {key:char, bubbles:true}));
       }
-      el.dispatchEvent(new Event('change', {bubbles:true}));
+      el.dispatchEvent(new win.Event('change', {bubbles:true}));
       el.blur();
       return;
     }
 
-    // Use native setter so React/Angular/Vue detect the change
-    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    // Use the element's own frame's native value setter so Angular/jQuery detect the change
+    const proto = el.tagName === 'TEXTAREA'
+      ? win.HTMLTextAreaElement.prototype
+      : win.HTMLInputElement.prototype;
     const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
 
     if (nativeSetter) { nativeSetter.call(el, ''); } else { el.value = ''; }
-    el.dispatchEvent(new Event('input', {bubbles:true}));
+    el.dispatchEvent(new win.Event('input', {bubbles:true}));
 
     for (const char of text) {
-      el.dispatchEvent(new KeyboardEvent('keydown',  {key:char, bubbles:true}));
-      el.dispatchEvent(new KeyboardEvent('keypress', {key:char, bubbles:true}));
+      el.dispatchEvent(new win.KeyboardEvent('keydown',  {key:char, bubbles:true}));
+      el.dispatchEvent(new win.KeyboardEvent('keypress', {key:char, bubbles:true}));
       const next = el.value + char;
       if (nativeSetter) { nativeSetter.call(el, next); } else { el.value = next; }
-      el.dispatchEvent(new Event('input', {bubbles:true}));
-      el.dispatchEvent(new KeyboardEvent('keyup', {key:char, bubbles:true}));
+      el.dispatchEvent(new win.Event('input', {bubbles:true}));
+      el.dispatchEvent(new win.KeyboardEvent('keyup', {key:char, bubbles:true}));
     }
 
-    el.dispatchEvent(new Event('change', {bubbles:true}));
+    el.dispatchEvent(new win.Event('change', {bubbles:true}));
     el.blur();
   }
 
@@ -751,7 +794,16 @@ Available actions:
         const el = findElement(action.selector);
         if (!el) { log(`Type failed — not found: ${action.selector}`, 'warn'); return; }
         log(`Type "${(action.text||'').slice(0,50)}" → ${action.selector}`, 'ok');
-        simulateType(el, action.text || ''); await sleep(ACTION_DELAY_MS); break;
+        simulateType(el, action.text || '');
+        await sleep(ACTION_DELAY_MS);
+        // If this is a quiz/test, mark the current question as answered
+        // (same logic as clickChoice) so the fast path can auto-advance
+        if (findElement('ol#navBtnList')) {
+          const qBtns  = queryAll('ol#navBtnList a.plainbtn:not([class*="gray"])');
+          const selBtn = [...qBtns].find(b => /\bselected\b/.test(b.className));
+          assessmentAnsweredQ = selBtn ? (parseInt(selBtn.innerText) || 1) : 1;
+        }
+        break;
       }
       case 'select': {
         const el = findElement(action.selector);
@@ -975,7 +1027,17 @@ Available actions:
 
     setStatus('Thinking…', true);
     const state = getPageState();
-    const userMsg = `Current page state:\n${JSON.stringify(state, null, 2)}\n\nWhat is the next action? Reply with only JSON.`;
+
+    // If there are empty text inputs on screen, force the LLM to use the type action.
+    // Without this hint it often defaults to clickChoice even on written-answer questions.
+    const emptyTextInputs = (state.textInputs || []).filter(t => t.currentValue === '(empty)');
+    const typeHint = emptyTextInputs.length > 0 && !state.hasRightAnswer
+      ? `\n\n⚠️ REQUIRED: There is an empty text field on screen. You MUST use:\n` +
+        `{"action":"type","selector":"${emptyTextInputs[0].selector}","text":"<your real answer>","reason":"..."}\n` +
+        `Do NOT use clickChoice — type your answer into the field, then click span#btnCheck.`
+      : '';
+
+    const userMsg = `Current page state:\n${JSON.stringify(state, null, 2)}\n\nWhat is the next action? Reply with only JSON.${typeHint}`;
 
     history.push({ role: 'user', content: userMsg });
     if (history.length > 20) history.splice(0, 2);
