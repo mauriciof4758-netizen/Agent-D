@@ -361,13 +361,39 @@ Available actions:
     return false;
   }
 
+  // ─── Content document filter ─────────────────────────────────────────────
+  // The outer player shell (top document) contains eNotes textarea, Cancel/Delete/Save
+  // buttons, glossary tabs, etc. — none of which are lesson content. Any query that
+  // looks for interactive lesson elements MUST exclude the top document so those
+  // outer-player inputs never show up as question fields.
+
+  function getContentDocs() {
+    return getAllDocs().filter(d => d !== document);
+  }
+
+  // Like queryAll but restricted to iframe content documents only
+  function queryContent(selector) {
+    const results = [];
+    for (const doc of getContentDocs()) {
+      try { results.push(...doc.querySelectorAll(selector)); } catch(e) {}
+    }
+    return results;
+  }
+
+  // Like findElement but restricted to iframe content documents only
+  function findContent(selector) {
+    for (const doc of getContentDocs()) {
+      try { const el = doc.querySelector(selector); if (el) return el; } catch(e) {}
+    }
+    return null;
+  }
+
   // ─── Answer choice reader ─────────────────────────────────────────────────
-  // Reads all div.answer-choice elements — works even when inputs are CSS-hidden
+  // Only scans content iframes — outer player tabs never have answer choices
 
   function getAnswerChoices() {
     const choices = [];
-    const divs = queryAll('div.answer-choice');
-    divs.forEach((div, i) => {
+    queryContent('div.answer-choice').forEach((div, i) => {
       const input = div.querySelector('input.answer-choice-button, input[type="radio"], input[type="checkbox"]');
       const label = div.querySelector('label.answer-choice-label, label');
       choices.push({
@@ -420,23 +446,26 @@ Available actions:
       '[class*="next"]', '[class*="submit"]', '[class*="continue"]',
     ].join(',')).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
 
-    const inputs = queryAll(
+    // inputs / draggables / dropzones: CONTENT DOCS ONLY
+    // The outer player has its own inputs (eNotes textarea, Cancel/Delete/Save)
+    // which are NOT question fields. Using queryContent() excludes them.
+    const inputs = queryContent(
       'input[type="text"], input[type="radio"], input[type="checkbox"], textarea, select, [contenteditable="true"]'
-    ).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
+    ).map(describeEl).filter(Boolean).slice(0, 20);
 
-    const draggables = queryAll(
+    const draggables = queryContent(
       '[draggable="true"], [class*="drag"], [class*="token"], [class*="word"], [class*="card"],' +
       'div.sbgTile, .ui-draggable'
-    ).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
+    ).map(describeEl).filter(Boolean).slice(0, 20);
 
-    const dropzones = queryAll(
+    const dropzones = queryContent(
       '[class*="drop"], [class*="blank"], [class*="slot"], [class*="target"], [ondrop],' +
       '.ui-droppable, .dropContainer'
-    ).filter(outside).map(describeEl).filter(Boolean).slice(0, 20);
+    ).map(describeEl).filter(Boolean).slice(0, 20);
 
-    // Check for wrong/correct answer state
-    const hasWrongAnswer  = !!findElement('span.TextAnswerIncorrect');
-    const hasRightAnswer  = !!findElement('span.TextAnswerCorrect');
+    // Check for wrong/correct answer state — content docs only
+    const hasWrongAnswer  = !!findContent('span.TextAnswerIncorrect');
+    const hasRightAnswer  = !!findContent('span.TextAnswerCorrect');
     const completedFrames = queryAll('li.FrameComplete').length;
     const totalFrames     = queryAll('li[id^="frame"]').length;
 
@@ -480,17 +509,16 @@ Available actions:
     })() : [];
 
     // textInputs: explicitly lists every writable text field with a ready-to-use CSS selector.
-    // The LLM must use {"action":"type","selector":"<selector>","text":"<answer>"} for these.
+    // Content docs ONLY — the outer player has eNotes textarea and Cancel/Delete/Save inputs
+    // that must never be mistaken for question answer fields.
     const textInputs = [];
-    for (const doc of getAllDocs()) {
+    for (const doc of getContentDocs()) {
       for (const el of doc.querySelectorAll(
         'textarea, input[type="text"], input:not([type]), [contenteditable="true"]'
       )) {
-        if (panelEl && panelEl.contains(el)) continue;
         try {
           const rect = el.getBoundingClientRect();
           if (rect.width === 0 && rect.height === 0) continue;
-          // Build the most specific selector possible
           let sel = el.id ? `#${el.id}`
             : el.name ? `${el.tagName.toLowerCase()}[name="${el.name}"]`
             : el.className ? `${el.tagName.toLowerCase()}.${(el.className||'').trim().split(/\s+/)[0]}`
@@ -740,8 +768,8 @@ Available actions:
 
   async function verifySubmit() {
     await sleep(2000);
-    const wrong   = !!findElement('span.TextAnswerIncorrect') || !!findElement('div.done-retry');
-    const correct = !!findElement('span.TextAnswerCorrect')   || !!findElement('div.done-complete');
+    const wrong   = !!findContent('span.TextAnswerIncorrect') || !!findContent('div.done-retry');
+    const correct = !!findContent('span.TextAnswerCorrect')   || !!findContent('div.done-complete');
     if (wrong) {
       log('❌ Wrong answer detected — injecting correction notice', 'error');
       history.push({
@@ -996,10 +1024,12 @@ Available actions:
     {
       const completedNow = queryAll('li.FrameComplete').length;
       const totalNow     = queryAll('li[id^="frame"]').length;
-      const needsInput   = queryAll('input[type="text"],input[type="radio"],input[type="checkbox"],textarea,select,div.answer-choice').length > 0
-                        || queryAll('div.sbgTile:not(.checked)').length > 0
-                        || !!findElement('span.TextAnswerIncorrect')
-                        || !!findElement('div.done-retry');
+      // needsInput: CONTENT DOCS ONLY — outer player eNotes textarea / Cancel-Delete-Save
+      // inputs must never make an informational slide appear interactive.
+      const needsInput   = queryContent('input[type="text"],input[type="radio"],input[type="checkbox"],textarea,select,div.answer-choice').length > 0
+                        || queryContent('div.sbgTile:not(.checked)').length > 0
+                        || !!findContent('span.TextAnswerIncorrect')
+                        || !!findContent('div.done-retry');
       const currentDone  = !!findElement('li.FrameCurrent.FrameComplete');
       const frameRight   = findElement('li.FrameRight');
       const allDone      = totalNow > 0 && completedNow >= totalNow;
