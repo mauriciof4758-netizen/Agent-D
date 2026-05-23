@@ -925,24 +925,20 @@ Available actions:
           log('⚠️ LLM called done but frames remain — ignoring', 'warn');
           break;
         }
-        // Never stop automatically — always look for the next thing to do.
-        log('📚 LLM called done — searching for next activity/lesson…', 'ok');
+        // Never stop. Try to navigate to the next activity/lesson.
+        log('📚 LLM called done — looking for next activity…', 'ok');
         const nextLink = findNextCourseLink();
         if (nextLink) {
           const label = (nextLink.value || nextLink.innerText || 'link').trim().slice(0, 40);
           log(`Found next: "${label}" — navigating`, 'ok');
           simulateClick(nextLink);
-          await sleep(3000);
+          await sleep(3500);
         } else {
-          // No obvious link — push a correction into history so the LLM looks harder
-          history.push({
-            role: 'user',
-            content: 'IMPORTANT: Do NOT output {"action":"done"} again. ' +
-                     'The current section appears complete but the course is NOT finished. ' +
-                     'Scan activityNav[], bodyText, and any visible buttons for something ' +
-                     'labeled Next, Continue, Start, Go to, or Begin and click it. ' +
-                     'If you see a course/lesson list, click the next incomplete item.',
-          });
+          // Nothing found yet — the player may still be loading the results screen.
+          // Wait 5 s and re-evaluate on the next tick (do NOT push history here because
+          // that causes the LLM to call "done" again in a tight loop).
+          log('Next activity not visible yet — waiting 5 s…', 'warn');
+          await sleep(5000);
         }
         break;
       }
@@ -960,7 +956,18 @@ Available actions:
 
   async function agentTick() {
     if (!running) return;
+    // Top-level safety net: ANY uncaught exception reschedules the loop instead
+    // of silently killing it. Without this, a single DOM exception (e.g. accessing
+    // a cross-origin iframe mid-navigation) would permanently stop the agent.
+    try {
+      await _agentTickBody();
+    } catch(fatalErr) {
+      log('⚠️ Unexpected error — recovering: ' + (fatalErr?.message || fatalErr), 'error');
+      if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS * 2);
+    }
+  }
 
+  async function _agentTickBody() {
     if (isMediaPlaying()) {
       log('Media playing — waiting…', 'info');
       setStatus('Waiting for media…', true);
@@ -1139,6 +1146,30 @@ Available actions:
     }
     // ── End fast path ─────────────────────────────────────────────────────────
 
+    // ── No-frames fast path: completion/results screens ───────────────────────
+    // When totalNow === 0 there is no FrameChain loaded — this happens on score
+    // summaries and course-completion screens. Instead of calling the LLM (which
+    // ends up looping on "done"), proactively look for a navigation button.
+    {
+      const totalNow = queryAll('li[id^="frame"]').length;
+      const isAssessment = !!findElement('ol#navBtnList');
+      if (totalNow === 0 && !isAssessment) {
+        const nextLink = findNextCourseLink();
+        if (nextLink) {
+          const label = (nextLink.value || nextLink.innerText || 'link').trim().slice(0, 40);
+          log(`Completion screen — clicking next: "${label}"`, 'ok');
+          simulateClick(nextLink);
+          await sleep(3500);
+        } else {
+          log('Completion screen — no nav found, retrying in 5 s', 'warn');
+          await sleep(5000);
+        }
+        if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+        return;
+      }
+    }
+    // ── End no-frames fast path ───────────────────────────────────────────────
+
     setStatus('Thinking…', true);
     const state = getPageState();
 
@@ -1174,8 +1205,20 @@ Available actions:
       return;
     }
 
+    // Guard: if LLM returns null, a bare string, or any non-action object, skip and retry
+    if (!action || typeof action !== 'object' || typeof action.action !== 'string') {
+      log('⚠️ LLM returned invalid action — retrying', 'warn');
+      if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
+      return;
+    }
+
     setStatus('Acting…', true);
-    await executeAction(action);
+    try {
+      await executeAction(action);
+    } catch(execErr) {
+      // Swallow action errors so the loop always continues
+      log('⚠️ Action error — recovering: ' + (execErr?.message || execErr), 'error');
+    }
     if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
   }
 
