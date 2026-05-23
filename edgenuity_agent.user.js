@@ -72,6 +72,46 @@ WRONG — never do this (no thinking, just guesses):
 {"action":"clickChoice","text":"Venus","reason":"seems right"}
 
 ════════════════════════════════════════════════════════════
+WRONG ANSWER — STRICT RETRY RULES
+════════════════════════════════════════════════════════════
+When hasWrongAnswer:true is in the page state OR the message says ⚠️ WRONG:
+  ① You MUST change the answer before clicking span#btnCheck again.
+  ② Do NOT click span#btnCheck without first typing a new answer or selecting a different choice.
+  ③ Submitting the same wrong answer again scores 0. Each attempt costs points.
+  ④ In your thinking field: explain WHY the previous answer was wrong, then give the CORRECT answer.
+
+For wrong text/fill-in-the-blank:
+  - The correct action is type — clear the field and type a completely different, factually correct answer.
+  - Use your subject knowledge. If you guessed before, look up the concept in your training data.
+
+For wrong multiple-choice:
+  - Uncheck the wrong selection with another clickChoice on it (toggles off), then click the correct one.
+  - Or simply clickChoice the correct answer directly — Edgenuity will deselect the old one.
+
+════════════════════════════════════════════════════════════
+MATCHING ACTIVITIES — PLAN ALL PAIRS BEFORE DRAGGING
+════════════════════════════════════════════════════════════
+When you see items to match/connect (terms + definitions, words + examples, etc.):
+
+CRITICAL RULE: Use your "thinking" field to PLAN EVERY PAIR before touching anything.
+  1. List ALL source items from bodyText/draggables[].
+  2. List ALL target slots from bodyText/dropzones[].
+  3. For each source, use your subject knowledge to identify its correct target.
+  4. Write the complete mapping in thinking: "Item A → Target X, Item B → Target Y, ..."
+  5. Only THEN drag one at a time following your plan.
+
+NEVER drag randomly hoping something fits — that scores 0 and wastes attempts.
+NEVER click span#btnCheck until every item is placed.
+If a placement was wrong (shown as incorrect), drag it away and place it in the correct zone.
+
+Example thinking for matching:
+  "draggables are: 'nucleus', 'mitochondria', 'ribosome'. dropzones are: 'controls cell', 'makes energy', 'makes protein'.
+   nucleus→controls cell (nucleus contains DNA, controls the cell).
+   mitochondria→makes energy (mitochondria = powerhouse).
+   ribosome→makes protein (ribosomes synthesize proteins).
+   Plan: drag nucleus to 'controls cell', drag mitochondria to 'makes energy', drag ribosome to 'makes protein'."
+
+════════════════════════════════════════════════════════════
 SUBJECT KNOWLEDGE
 ════════════════════════════════════════════════════════════
 Use your training knowledge to give the academically correct answer:
@@ -851,13 +891,30 @@ Available actions:
       case 'click': {
         const el = findElement(action.selector);
         if (!el) { log(`Click failed — not found: ${action.selector}`, 'warn'); return; }
+
+        // Block re-submitting the same wrong answer — the agent must change the answer first.
+        // Clicking btnCheck while TextAnswerIncorrect is still visible just burns an attempt.
+        const isSubmitClick = SUBMIT_SELECTORS.some(s => {
+          try { return el === findElement(s); } catch(e) { return false; }
+        });
+        if (isSubmitClick && (findContent('span.TextAnswerIncorrect') || findContent('div.done-retry'))) {
+          log('🚫 Submit blocked — wrong answer still visible. Must change answer first.', 'error');
+          history.push({
+            role: 'user',
+            content: '🚫 SUBMIT BLOCKED: span.TextAnswerIncorrect is still on screen. ' +
+                     'Your previous answer is STILL WRONG and you have NOT changed it yet. ' +
+                     'Clicking submit again without changing the answer will score 0. ' +
+                     'Use your thinking field to determine the correct answer, ' +
+                     'then type or select a DIFFERENT answer before clicking span#btnCheck.',
+          });
+          await sleep(ACTION_DELAY_MS);
+          return;
+        }
+
         log(`Click: ${action.selector} — ${action.reason}`, 'ok');
         simulateClick(el);
         await sleep(ACTION_DELAY_MS);
-        // Run post-submit verification whenever the agent clicks the Done/Check button
-        if (SUBMIT_SELECTORS.some(s => {
-          try { return el === findElement(s); } catch(e) { return false; }
-        })) {
+        if (isSubmitClick) {
           await verifySubmit();
         }
         break;
@@ -1183,6 +1240,21 @@ Available actions:
         ).join('\n');
     }
 
+    // ── Wrong-answer warning: name what's wrong and block re-submit ──────────
+    let wrongHint = '';
+    if (state.hasWrongAnswer) {
+      const currentAnswers = (state.textInputs || [])
+        .filter(t => t.currentValue && t.currentValue !== '(empty)')
+        .map(t => `"${t.currentValue}"`).join(', ');
+      const currentChoices = (state.answerChoices || [])
+        .filter(c => c.checked).map(c => `"${c.text}"`).join(', ');
+      const whatIsWrong = currentAnswers || currentChoices || '(unknown)';
+      wrongHint = `\n\n🚫 WRONG ANSWER: The answer ${whatIsWrong} is INCORRECT. ` +
+        `DO NOT click span#btnCheck again without changing the answer first — ` +
+        `that will score 0. You MUST type a different answer or select a different choice. ` +
+        `Use your thinking field to reason about the correct answer from your training knowledge.`;
+    }
+
     // ── Force type action when an empty text field is present ─────────────────
     const emptyTextInputs = (state.textInputs || []).filter(t => t.currentValue === '(empty)');
     const typeHint = emptyTextInputs.length > 0 && !state.hasRightAnswer
@@ -1191,7 +1263,7 @@ Available actions:
         `Do NOT use clickChoice.`
       : '';
 
-    const userMsg = `Current page state:\n${JSON.stringify(state, null, 2)}${choicesBlock}\n\nWhat is the next action? Reply with only a JSON object (include "thinking" field).${typeHint}`;
+    const userMsg = `Current page state:\n${JSON.stringify(state, null, 2)}${choicesBlock}\n\nWhat is the next action? Reply with only a JSON object (include "thinking" field).${wrongHint}${typeHint}`;
 
     history.push({ role: 'user', content: userMsg });
     if (history.length > 20) history.splice(0, 2);
