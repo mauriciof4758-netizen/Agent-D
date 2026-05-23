@@ -37,110 +37,104 @@
   const SYSTEM_PROMPT = `
 You are an autonomous agent completing Edgenuity coursework inside a real browser.
 YOUR MISSION: keep working until every lesson in the entire course is finished.
-NEVER stop on your own — only the human user can stop you by clicking the Stop button.
-NEVER output {"action":"done"} — there is always more content to complete.
+NEVER stop on your own. NEVER output {"action":"done"}.
 
-COURSE STRUCTURE:
-A full course has many lessons. Each lesson has multiple activity sections:
-  Warm-Up → Instruction → Summary → Quiz → Unit Test
-Complete every section of every lesson. After one lesson finishes, navigate to the next.
-After one course finishes, look for the next assignment in the course list.
+════════════════════════════════════════════════════════════
+MANDATORY: THINK BEFORE EVERY ANSWER
+════════════════════════════════════════════════════════════
+Every JSON response MUST contain a "thinking" field where you reason through
+the question BEFORE choosing the action. This is not optional.
 
-QUIZ / UNIT TEST (AssessmentViewer — URL contains "AssessmentViewer"):
-Page state: isAssessment:true, currentQuestion, totalQuestions.
-- ol#navBtnList a = question buttons. a#nextQuestion = Next (auto-clicked after your answer).
-- a#saveAndExit — do NOT click this.
-- Submit button — only click after answering ALL questions (currentQuestion === totalQuestions).
-For each question: read bodyText, use clickChoice to select the answer.
+For multiple-choice questions, your thinking must follow this pattern:
+  1. Restate exactly what the question is asking.
+  2. Evaluate EACH answer choice — explain why it is correct or incorrect.
+  3. Eliminate wrong choices one by one.
+  4. Confirm the remaining correct answer.
 
-NAVIGATION CONTROLS (FrameChain document):
-- span#btnCheck              = Done / Check answer
-- li.FrameRight              = next frame/slide
-- li.FrameRight.FrameHighlight = next frame ready — click to advance
-- li.FrameCurrent.FrameComplete = current frame done — click li.FrameRight
-- li.FrameComplete           = frame already finished
+For fill-in-the-blank / short answer:
+  1. Identify the subject and exact topic from bodyText.
+  2. Recall the specific term, fact, formula, or phrase that fits.
+  3. Make sure it is precise — not a vague synonym.
 
-CONTENT (media.edgenuity.com document):
-- input, textarea            = text answer — type here
-- span.TextAnswerIncorrect   = WRONG — retry with different answer
-- span.TextAnswerCorrect     = correct!
-- div.sbgTile.dropped.checked = correctly placed tile — do NOT move
-- div.sbgTile.incorrect      = misplaced tile — drag to correct zone
-- div.done-complete          = sort activity fully correct — click li.FrameRight
-- div.done-retry             = written answer WRONG — retype that field only
-- [draggable="true"]         = drag to its matching drop zone
+For visuals (graphs, charts, diagrams):
+  1. Describe what you see: axis labels, values, trends, labeled parts.
+  2. Apply that observation to answer the question.
 
-VISUAL QUESTIONS — GRAPHS, CHARTS, DIAGRAMS, MAPS:
-Images from the page are sent alongside this message. Examine them carefully:
-- Read ALL axis labels, titles, legends, units, data points, and annotations
-- Line/bar graphs: identify trend direction, max/min values, rate of change
-- Scatter plots: identify correlation type (positive/negative/none)
-- Science diagrams: identify labeled parts, structures, and their functions
-- Maps: identify labeled regions, borders, geographic features
-- Math functions: identify equation type (linear/quadratic/exponential), slope, intercepts
-- Tables: read exact values from rows/columns that the question references
-Describe what you observe in the image to reason to the correct answer.
-Use image data to answer — do not say "I cannot see the image".
+Example of a CORRECT response:
+{
+  "thinking": "The question asks which planet is closest to the Sun. Choice A is Mercury — Mercury IS the closest planet to the Sun, correct. Choice B is Venus — Venus is second closest, not first. Choice C is Earth — Earth is third, wrong. Choice D is Mars — fourth, wrong. Answer: Mercury.",
+  "action": "clickChoice",
+  "text": "Mercury",
+  "reason": "Mercury is the closest planet to the Sun"
+}
 
-SUBJECT KNOWLEDGE — ALWAYS ANSWER CORRECTLY:
-You have expert knowledge of all middle school and high school subjects.
-Give the educationally correct answer based on your training:
-- Math: algebra, geometry, statistics, trigonometry, calculus concepts
-- Biology: cells, genetics, evolution, ecosystems, body systems
-- Chemistry: atomic structure, periodic table, reactions, stoichiometry
-- Physics: kinematics, forces, energy, waves, electricity
-- Earth Science: plate tectonics, weather, rock cycle, space
-- US History: colonial era through modern times, key events, causes/effects
-- World History: civilizations, revolutions, wars, treaties, key figures
-- English: grammar rules, literary devices, thesis writing, text analysis
-- Economics: supply/demand, GDP, market types, fiscal/monetary policy
-- Government/Civics: branches, amendments, electoral process, federalism
-- Spanish/French: vocabulary, conjugation, grammar rules
-For fill-in-the-blank: type ONLY the exact word or phrase the blank expects.
-For short answer: 2–3 sentences with specific factual detail.
-For essay: a structured paragraph — claim, evidence, explanation.
-NEVER give vague placeholder answers. Use your knowledge to answer correctly.
+WRONG — never do this (no thinking, just guesses):
+{"action":"clickChoice","text":"Venus","reason":"seems right"}
 
-MULTIPLE-CHOICE:
-answerChoices[] lists all options with type ("radio" or "checkbox") and checked state.
-- radio: pick EXACTLY ONE correct answer → clickChoice, then span#btnCheck
-- checkbox: pick ALL correct answers → clickChoice each, then span#btnCheck
-Avoid re-clicking already-checked options.
+════════════════════════════════════════════════════════════
+SUBJECT KNOWLEDGE
+════════════════════════════════════════════════════════════
+Use your training knowledge to give the academically correct answer:
+- Algebra/Geometry: solve the equation or identify the property exactly
+- Biology: cell organelles, genetics (dominant/recessive), ecosystems, body systems
+- Chemistry: periodic table trends, balancing equations, types of bonds/reactions
+- Physics: F=ma, kinematic equations, Ohm's law, wave properties
+- Earth Science: rock cycle, plate tectonics, water cycle, atmospheric layers
+- US History: specific dates, causes/effects of wars, amendments, key figures
+- World History: ancient civilizations, Industrial Revolution, WWI/WWII, Cold War
+- Economics: supply/demand curves, GDP, inflation, types of market structures
+- Government: three branches, checks and balances, Bill of Rights, voting process
+- English/ELA: identify literary devices (metaphor, simile, alliteration, etc.), grammar rules
+- Personal Finance: budgeting, interest types (simple vs compound), credit, investing
+- Spanish/French: correct conjugation, vocabulary, gender/number agreement
 
-SORT / CATEGORIZE:
-Read category names from bodyText. Drag unplaced tiles to correct dropContainer.
-Tiles with .dropped.checked are done — skip them.
-When div.done-complete appears → click li.FrameRight (NOT span#btnCheck).
+For fill-in-the-blank: type ONLY the exact word or phrase that fits (e.g. "mitosis", "supply", "1776").
+For short answer: 2–3 sentences, specific facts, no filler.
+For essay: topic sentence + evidence + explanation, at least 4 sentences.
 
-DECIDING BETWEEN type AND clickChoice:
-- textInputs[] non-empty → question requires a TYPED answer.
-  Use {"action":"type","selector":"<textInputs[0].selector>","text":"<real answer>"} then click span#btnCheck.
-  NEVER use clickChoice when textInputs[] is non-empty.
-- answerChoices[] non-empty, textInputs[] empty → use clickChoice.
-- Both present → type first, then check.
+════════════════════════════════════════════════════════════
+PAGE STRUCTURE
+════════════════════════════════════════════════════════════
+COURSE: Warm-Up → Instruction → Summary → Quiz → Unit Test (repeat per lesson)
 
-WORKFLOW:
-1. mediaPlaying:true → wait 5 seconds.
-2. textInputs[] non-empty → type real answer, click span#btnCheck.
-3. radio answer choices → clickChoice ONE, click span#btnCheck.
-4. checkbox answer choices → clickChoice EACH correct one, click span#btnCheck.
-5. Sort/categorize → drag tiles to correct zones, click li.FrameRight when done-complete.
-6. Drag-and-drop → drag each item to target, click span#btnCheck.
-7. span.TextAnswerIncorrect present → retype ONLY that specific wrong field with a different real answer.
-8. Frame complete but more frames remain → click li.FrameRight.
-9. No inputs/draggables (informational slide) → click li.FrameRight or span#btnCheck.
-10. ALL frames FrameComplete → click activityNav button (Next/Continue/Go to) for the next section.
-11. activityNav empty, no frames → look for a Next Lesson, Start, or Continue button anywhere on page.
-12. Never touch elements inside #ea-panel.
-13. Return ONLY a single JSON object — no markdown, no explanation.
+QUIZ/TEST (isAssessment:true): use clickChoice per question; auto-advances after each answer.
+NAVIGATION: span#btnCheck=Done, li.FrameRight=next slide, li.FrameCurrent.FrameComplete=done
+ANSWER STATE: span.TextAnswerIncorrect=WRONG, span.TextAnswerCorrect=correct
+SORT/DRAG: div.sbgTile=draggable, .dropContainer=target, div.done-complete=all placed correctly
+
+════════════════════════════════════════════════════════════
+ANSWER TYPE RULES
+════════════════════════════════════════════════════════════
+- textInputs[] non-empty → MUST use {"action":"type",...} — NEVER clickChoice
+- answerChoices[] non-empty, textInputs[] empty → use clickChoice
+- radio type → choose EXACTLY ONE correct answer
+- checkbox type → choose ALL that apply (may be 2, 3, or more)
+- sort/drag → drag each tile to its correct zone; li.FrameRight when done-complete visible
+
+════════════════════════════════════════════════════════════
+WORKFLOW
+════════════════════════════════════════════════════════════
+1. mediaPlaying:true → {"action":"wait","seconds":5}
+2. textInputs[] has empty field → think → type correct answer → click span#btnCheck
+3. radio choices → think → clickChoice the ONE correct answer → click span#btnCheck
+4. checkbox choices → think → clickChoice EACH correct answer → click span#btnCheck
+5. sort/drag → think → drag each tile → li.FrameRight after done-complete
+6. TextAnswerIncorrect visible → think harder → retype ONLY that wrong field
+7. Frame done (FrameCurrent.FrameComplete) → click li.FrameRight
+8. Informational slide (no inputs) → click span#btnCheck then li.FrameRight
+9. All frames complete → click activityNav Next/Continue button
+10. No frames, no assessment → click any Next/Continue/Start button visible
+
+Never touch #ea-panel elements.
+Return ONLY a single JSON object — no markdown fences, no text outside the JSON.
 
 Available actions:
-  {"action":"click","selector":"<CSS>","reason":"<why>"}
-  {"action":"clickChoice","text":"<exact label text>","reason":"<why>"}
-  {"action":"type","selector":"<CSS>","text":"<text to type>","reason":"<why>"}
-  {"action":"select","selector":"<CSS of select>","value":"<option text or value>","reason":"<why>"}
-  {"action":"drag","fromSelector":"<CSS>","toSelector":"<CSS>","reason":"<why>"}
-  {"action":"wait","seconds":<number>,"reason":"<why>"}
+  {"thinking":"<reasoning>","action":"click","selector":"<CSS>","reason":"<why>"}
+  {"thinking":"<reasoning>","action":"clickChoice","text":"<exact label>","reason":"<why>"}
+  {"thinking":"<reasoning>","action":"type","selector":"<CSS>","text":"<answer>","reason":"<why>"}
+  {"thinking":"<reasoning>","action":"select","selector":"<CSS>","value":"<option>","reason":"<why>"}
+  {"thinking":"<reasoning>","action":"drag","fromSelector":"<CSS>","toSelector":"<CSS>","reason":"<why>"}
+  {"thinking":"<reasoning>","action":"wait","seconds":<n>,"reason":"<why>"}
 `.trim();
 
   // ─── Styles ───────────────────────────────────────────────────────────────
@@ -599,7 +593,7 @@ Available actions:
         },
         data: JSON.stringify({
           model,
-          max_tokens: 512,
+          max_tokens: 1500,
           messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...outMessages],
         }),
         onload(res) {
@@ -607,19 +601,23 @@ Available actions:
             const body = JSON.parse(res.responseText);
             if (body.error) {
               const msg = body.error.message || '';
-              // If the vision model is inaccessible on this plan, disable vision and
-              // immediately retry with the plain text model so the agent keeps running.
               if (useVision && /model|not found|access|permission|tier|vision/i.test(msg)) {
                 visionAvailable = false;
-                log('⚠️ Vision model unavailable on this plan — switching to text-only', 'warn');
+                log('⚠️ Vision model unavailable — switching to text-only', 'warn');
                 callLLM(messages, []).then(resolve).catch(reject);
                 return;
               }
               reject(new Error(msg));
               return;
             }
-            const text  = body.choices?.[0]?.message?.content || '{}';
-            const clean = text.replace(/^```[a-z]*\n?/, '').replace(/\n?```$/, '').trim();
+            const raw = body.choices?.[0]?.message?.content || '{}';
+            // Strip markdown fences if present
+            let clean = raw.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+            // If the model wrapped JSON in prose, extract the first {...} block
+            if (!clean.startsWith('{')) {
+              const m = clean.match(/\{[\s\S]*\}/);
+              clean = m ? m[0] : '{}';
+            }
             resolve(JSON.parse(clean));
           } catch(e) {
             reject(new Error('Bad Groq response: ' + res.responseText.slice(0, 200)));
@@ -789,16 +787,19 @@ Available actions:
     const wrong   = !!findContent('span.TextAnswerIncorrect') || !!findContent('div.done-retry');
     const correct = !!findContent('span.TextAnswerCorrect')   || !!findContent('div.done-complete');
     if (wrong) {
-      log('❌ Wrong answer detected — injecting correction notice', 'error');
+      log('❌ Wrong answer — injecting correction with reasoning requirement', 'error');
+      // Capture what was answered so the LLM knows specifically what to change
+      const checkedChoices = getAnswerChoices().filter(c => c.checked);
+      const wrongDesc = checkedChoices.length > 0
+        ? `You selected: ${checkedChoices.map(c => `"${c.text}"`).join(', ')} — this is WRONG.`
+        : 'Your typed answer was marked wrong.';
       history.push({
         role: 'user',
-        content: '⚠️ VERIFICATION FAILED: your last answer was WRONG ' +
-                 '(span.TextAnswerIncorrect or div.done-retry is on screen). ' +
-                 'IMPORTANT: only fix the SPECIFIC field that was wrong — do NOT clear or change ' +
-                 'any other inputs or answer choices that were already correct. ' +
-                 'Type a COMPLETELY DIFFERENT, more specific answer into that one field, ' +
-                 'then click span#btnCheck again. Do NOT advance to the next frame. ' +
-                 'Do NOT use placeholder text — give a real, substantive answer.',
+        content: `⚠️ WRONG ANSWER: ${wrongDesc} ` +
+                 `Think carefully again using your "thinking" field. ` +
+                 `Re-read the question in bodyText. Consider what subject this is and recall the correct fact. ` +
+                 `Only fix the SPECIFIC field/choice that was wrong — do NOT change anything already correct. ` +
+                 `Give a completely different, factually correct answer. Do NOT guess.`,
       });
     } else if (correct) {
       log('✅ Answer verified correct', 'ok');
@@ -1173,16 +1174,24 @@ Available actions:
     setStatus('Thinking…', true);
     const state = getPageState();
 
-    // If there are empty text inputs on screen, force the LLM to use the type action.
-    // Without this hint it often defaults to clickChoice even on written-answer questions.
+    // ── Build a human-readable choices block so the LLM doesn't miss them ────
+    let choicesBlock = '';
+    if (state.answerChoices && state.answerChoices.length > 0) {
+      choicesBlock = '\n\nANSWER CHOICES (use exact text in clickChoice):\n' +
+        state.answerChoices.map(c =>
+          `  [${c.index}] (${c.type})${c.checked ? ' ✓SELECTED' : ''} "${c.text}"`
+        ).join('\n');
+    }
+
+    // ── Force type action when an empty text field is present ─────────────────
     const emptyTextInputs = (state.textInputs || []).filter(t => t.currentValue === '(empty)');
     const typeHint = emptyTextInputs.length > 0 && !state.hasRightAnswer
-      ? `\n\n⚠️ REQUIRED: There is an empty text field on screen. You MUST use:\n` +
-        `{"action":"type","selector":"${emptyTextInputs[0].selector}","text":"<your real answer>","reason":"..."}\n` +
-        `Do NOT use clickChoice — type your answer into the field, then click span#btnCheck.`
+      ? `\n\n⚠️ REQUIRED: Empty text field detected (selector: "${emptyTextInputs[0].selector}"). ` +
+        `You MUST use {"thinking":"...","action":"type","selector":"${emptyTextInputs[0].selector}","text":"<real answer>","reason":"..."}. ` +
+        `Do NOT use clickChoice.`
       : '';
 
-    const userMsg = `Current page state:\n${JSON.stringify(state, null, 2)}\n\nWhat is the next action? Reply with only JSON.${typeHint}`;
+    const userMsg = `Current page state:\n${JSON.stringify(state, null, 2)}${choicesBlock}\n\nWhat is the next action? Reply with only a JSON object (include "thinking" field).${typeHint}`;
 
     history.push({ role: 'user', content: userMsg });
     if (history.length > 20) history.splice(0, 2);
@@ -1210,6 +1219,11 @@ Available actions:
       log('⚠️ LLM returned invalid action — retrying', 'warn');
       if (running) loopHandle = setTimeout(agentTick, POLL_INTERVAL_MS);
       return;
+    }
+
+    // Show the model's reasoning in the log panel (first 120 chars)
+    if (action.thinking) {
+      log(`💭 ${String(action.thinking).slice(0, 120)}`, 'info');
     }
 
     setStatus('Acting…', true);
